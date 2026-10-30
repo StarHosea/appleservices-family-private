@@ -9,11 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	appleservices "github.com/Laky-64/appleservices"
 	"github.com/Laky-64/appleservices/internal/control"
+	"github.com/Laky-64/appleservices/internal/platform"
 )
 
 func verifiedGSACheckpointReady(dir, appleID string) bool {
@@ -129,7 +131,7 @@ func (s *Server) activationRoot() string {
 
 func (s *Server) activationPlan(ctx context.Context, account *Account, runDir string) (*control.ActivationInfo, error) {
 	root := s.activationRoot()
-	helper := filepath.Join(filepath.Dir(s.config.Worker), "accountsetupcheck.exe")
+	helper := filepath.Join(filepath.Dir(s.config.Worker), platform.Executable("accountsetupcheck"))
 	dump := filepath.Join(runDir, "setup.html")
 	output, err := runActivationCommand(ctx, root, account.AppleID, helper,
 		"-dir", account.Dir, "-resume", filepath.Join(account.Dir, "session.json"), "-dump", dump)
@@ -196,7 +198,7 @@ func (s *Server) activationAction(parent context.Context, account *Account, acce
 	if approvedTuple == "" || approvedTuple != activationTuple(plan) {
 		return control.Result{Message: "Apple 条款版本已变化，请重新查看并确认", Stage: "activation-consent", Activation: plan}
 	}
-	helper := filepath.Join(filepath.Dir(s.config.Worker), "accountsetupcheck.exe")
+	helper := filepath.Join(filepath.Dir(s.config.Worker), platform.Executable("accountsetupcheck"))
 	termsDump := filepath.Join(runDir, "terms.html")
 	_, _ = runActivationCommand(ctx, root, account.AppleID, helper,
 		"-dir", account.Dir, "-resume", filepath.Join(account.Dir, "session.json"), "-accept-terms", "-expected-terms", approvedTuple, "-dump", termsDump)
@@ -209,10 +211,14 @@ func (s *Server) activationAction(parent context.Context, account *Account, acce
 		return control.Result{Message: "无法准备 Mac NAC 运行时", Stage: "activation-nac"}
 	}
 	validation := filepath.Join(runDir, "nac-validation.bin")
+	encryptLibrary := filepath.Join(root, ".cache", "activation-source-review", "mac-io-encrypt.dll")
+	if runtime.GOOS == "linux" {
+		encryptLibrary = filepath.Join(root, ".cache", "activation-source-review", "mac-io-encrypt.so")
+	}
 	nacOutput, nacErr := runActivationCommand(ctx, root, account.AppleID, s.config.Python,
 		filepath.Join(root, "tools", "mac-nac-check.py"), "--profile", filepath.Join(account.Dir, "native-adi", "hw_info.plist"),
-		"--runtime", runtimeCopy, "--encrypt-dll", filepath.Join(root, ".cache", "activation-source-review", "mac-io-encrypt.dll"),
-		"--validation-out", validation, "--synthetic-missing-board-fields", "--transport", filepath.Join(filepath.Dir(s.config.Worker), "nacexchange.exe"))
+		"--runtime", runtimeCopy, "--encrypt-dll", encryptLibrary,
+		"--validation-out", validation, "--synthetic-missing-board-fields", "--transport", filepath.Join(filepath.Dir(s.config.Worker), platform.Executable("nacexchange")))
 	if nacErr != nil || !strings.Contains(string(nacOutput), `"stage": "NACSign"`) {
 		return control.Result{Message: "Mac NAC 生成未完成", Stage: "activation-nac"}
 	}

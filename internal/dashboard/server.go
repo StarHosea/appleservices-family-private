@@ -23,6 +23,7 @@ import (
 
 	"github.com/Laky-64/appleservices/icloud"
 	"github.com/Laky-64/appleservices/internal/control"
+	"github.com/Laky-64/appleservices/internal/platform"
 )
 
 //go:embed web/*
@@ -30,6 +31,7 @@ var assets embed.FS
 
 type Config struct {
 	Dir, Worker, Library, Python, MacPushSetup string
+	Listen, PublicURL, AdminToken              string
 	Port                                       int
 }
 type Server struct {
@@ -104,7 +106,11 @@ type credentials struct {
 }
 
 func New(config Config) (*Server, error) {
-	listener, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", intString(config.Port)))
+	address, err := listenAddress(config)
+	if err != nil {
+		return nil, err
+	}
+	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		return nil, errors.New("面板端口已被使用，请打开已运行的面板")
 	}
@@ -271,9 +277,33 @@ func maskAccount(appleID string) string {
 	return pieces[0][:1] + "***@" + pieces[1]
 }
 
-func (s *Server) URL() string { return "http://" + s.listener.Addr().String() }
+func (s *Server) URL() string {
+	if s.config.PublicURL != "" {
+		return s.config.PublicURL
+	}
+	return "http://" + s.listener.Addr().String()
+}
 func (s *Server) Serve(ctx context.Context) error {
-	go func() { <-ctx.Done(); s.http.Close() }()
+	go func() {
+		<-ctx.Done()
+		if s.config.AdminToken != "" {
+			stopCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			defer cancel()
+			s.accountsMu.Lock()
+			accounts := append([]*Account(nil), s.accounts...)
+			s.accountsMu.Unlock()
+			var workers sync.WaitGroup
+			for _, account := range accounts {
+				workers.Add(1)
+				go func(dir string) {
+					defer workers.Done()
+					_ = s.stopIn(stopCtx, dir)
+				}(account.Dir)
+			}
+			workers.Wait()
+		}
+		s.http.Close()
+	}()
 	err := s.http.Serve(s.listener)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
@@ -322,7 +352,7 @@ func (s *Server) ownsIn(pid int, dir string) bool {
 	// Windows may retain the previous image under a temporary '~' suffix when
 	// the worker binary is rebuilt while that worker is still running.
 	cleanPath = strings.TrimRight(cleanPath, "~")
-	if strings.EqualFold(cleanPath, filepath.Clean(s.config.Worker)) || strings.EqualFold(cleanPath, filepath.Join(filepath.Dir(s.config.Worker), "trusted-device.exe")) {
+	if strings.EqualFold(cleanPath, filepath.Clean(s.config.Worker)) || strings.EqualFold(cleanPath, filepath.Join(filepath.Dir(s.config.Worker), platform.Executable("trusted-device"))) {
 		return true
 	}
 	return s.controlAliveIn(pid, dir)
@@ -629,7 +659,7 @@ func (s *Server) familyAction(ctx context.Context, account *Account, joinStorage
 	if account == nil || !acceptedCheckpointReady(account.Dir, account.AppleID) {
 		return control.Result{Message: "当前账号尚未完成 iCloud 激活", Stage: "family-preflight"}
 	}
-	helper := filepath.Join(filepath.Dir(s.config.Worker), "familyinspect.exe")
+	helper := filepath.Join(filepath.Dir(s.config.Worker), platform.Executable("familyinspect"))
 	if info, err := os.Stat(helper); err != nil || !info.Mode().IsRegular() {
 		return control.Result{Message: "家庭工具不可用，请重新构建本地后台", Stage: "family-worker"}
 	}
@@ -693,7 +723,7 @@ func (s *Server) removeFamilyMember(ctx context.Context, organizer *Account, tar
 	if !acceptedCheckpointReady(organizer.Dir, organizer.AppleID) || !acceptedCheckpointReady(target.Dir, target.AppleID) {
 		return control.Result{Message: "母号或目标成员尚未完成 iCloud 激活", Stage: "family-preflight"}
 	}
-	helper := filepath.Join(filepath.Dir(s.config.Worker), "familyinspect.exe")
+	helper := filepath.Join(filepath.Dir(s.config.Worker), platform.Executable("familyinspect"))
 	if info, statErr := os.Stat(helper); statErr != nil || !info.Mode().IsRegular() {
 		return control.Result{Message: "家庭工具不可用，请重新构建本地后台", Stage: "family-worker"}
 	}
@@ -1084,14 +1114,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
-	if r.Host != s.listener.Addr().String() {
+	if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
+		w.Header().Set("Content-Type", "text/plain")
+		io.WriteString(w, "ok\n")
+		return
+	}
+	originURL, _ := url.Parse(s.URL())
+	if r.Host != originURL.Host {
 		http.Error(w, "local host required", 403)
+		return
+	}
+	if !s.authorize(w, r) {
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/") {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		origin := r.Header.Get("Origin")
-		if (origin != "" && origin != s.URL()) || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-App-Token")), []byte(s.token)) != 1 {
+		if (origin != "" && origin != s.URL()) || (!s.bearerAuthorized(r) && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-App-Token")), []byte(s.token)) != 1) {
 			http.Error(w, `{"message":"请刷新面板后重试"}`, 403)
 			return
 		}
@@ -1216,7 +1255,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				result.Message = err.Error()
 			}
 			if selected != nil && result.Family != nil && strings.HasPrefix(action.Action, "family-") {
-				helper := filepath.Join(filepath.Dir(s.config.Worker), "familyinspect.exe")
+				helper := filepath.Join(filepath.Dir(s.config.Worker), platform.Executable("familyinspect"))
 				cacheCtx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
 				s.resolveFamilyOrganizer(cacheCtx, helper, selected, result.Family)
 				cancel()

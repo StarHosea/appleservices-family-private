@@ -24,6 +24,27 @@ import (
 
 const LibrarySHA256 = "ca88e816dda449d7ba24d54a5ed709a2d392daeae28c25a61dcd2e7496e44cfe"
 
+// LinuxLibrarySHA256 pins the native library from the upstream v1.15.0+205
+// Linux release. Its FRB content hash and dispatch table match the Windows ABI.
+const LinuxLibrarySHA256 = "ce260415598b78c0810ae6b917145fbca804f6f19385ca9d34d55921d38210cf"
+
+func DefaultLibraryPath() string {
+	if path := os.Getenv("APPLESERVICES_ADI_LIBRARY"); path != "" {
+		return path
+	}
+	if runtime.GOOS == "windows" {
+		return "./.cache/openbubbles-store/rust_lib_bluebubbles.dll"
+	}
+	return "./.cache/openbubbles-linux/librust_lib_bluebubbles.so"
+}
+
+func compiler() string {
+	if value := os.Getenv("APPLESERVICES_ADI_CC"); value != "" {
+		return value
+	}
+	return "gcc"
+}
+
 func bridgeEnvironment() []string {
 	var result []string
 	for _, entry := range os.Environ() {
@@ -40,8 +61,10 @@ func CheckRuntime(python string) error {
 	if python == "" {
 		python = "python"
 	}
-	if _, err := exec.LookPath("gcc"); err != nil {
-		return errors.New("nativeadi: gcc/MinGW is required")
+	if os.Getenv("APPLESERVICES_ADI_FENCE") == "" {
+		if _, err := exec.LookPath(compiler()); err != nil {
+			return errors.New("nativeadi: native bridge compiler is required")
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -62,6 +85,9 @@ var bridgeSource []byte
 
 //go:embed assets/transport_fence.c
 var fenceSource []byte
+
+//go:embed assets/transport_fence_linux.c
+var linuxFenceSource []byte
 
 type Config struct {
 	LibraryPath string
@@ -96,8 +122,11 @@ type Client struct {
 }
 
 func ValidateLibrary(path string) error {
-	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
-		return errors.New("nativeadi: Windows x64 is required")
+	expected := LibrarySHA256
+	if runtime.GOOS == "linux" && (runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64") {
+		expected = LinuxLibrarySHA256
+	} else if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
+		return errors.New("nativeadi: use the Linux container on this platform")
 	}
 	if !filepath.IsAbs(path) {
 		return errors.New("nativeadi: library path must be absolute")
@@ -111,8 +140,8 @@ func ValidateLibrary(path string) error {
 	if _, err := io.Copy(hash, io.LimitReader(file, 64*1024*1024)); err != nil {
 		return errors.New("nativeadi: library hash read failed")
 	}
-	if hex.EncodeToString(hash.Sum(nil)) != LibrarySHA256 {
-		return errors.New("nativeadi: library does not match the signature-verified OpenBubbles 1.18.800.0 release")
+	if hex.EncodeToString(hash.Sum(nil)) != expected {
+		return errors.New("nativeadi: library does not match the pinned upstream release")
 	}
 	return nil
 }
@@ -158,26 +187,51 @@ func (c *Client) Start(ctx context.Context) error {
 			os.RemoveAll(directory)
 		}
 	}()
-	for name, source := range map[string][]byte{"helper.py": helperSource, "bridge.py": bridgeSource, "transport_fence.c": fenceSource} {
+	fenceCode := fenceSource
+	if runtime.GOOS == "linux" {
+		fenceCode = linuxFenceSource
+	}
+	for name, source := range map[string][]byte{"helper.py": helperSource, "bridge.py": bridgeSource, "transport_fence.c": fenceCode} {
 		if err := os.WriteFile(filepath.Join(directory, name), source, 0600); err != nil {
 			return errors.New("nativeadi: could not save bridge source")
 		}
 	}
 	fence := filepath.Join(directory, "transport_fence.dll")
-	compiler, err := exec.LookPath("gcc")
-	if err != nil {
-		return errors.New("nativeadi: gcc/MinGW is required to build the local transport isolation shim")
+	arguments := []string{"-shared", "-O2", filepath.Join(directory, "transport_fence.c"), "-o", fence, "-lws2_32"}
+	if runtime.GOOS == "linux" {
+		fence = filepath.Join(directory, "transport_fence.so")
+		arguments = []string{"-shared", "-fPIC", "-O2", filepath.Join(directory, "transport_fence.c"), "-o", fence, "-ldl"}
 	}
-	build := exec.CommandContext(ctx, compiler, "-shared", "-O2", filepath.Join(directory, "transport_fence.c"), "-o", fence, "-lws2_32")
-	backgroundexec.Configure(build)
-	build.Env = bridgeEnvironment()
-	if err := build.Run(); err != nil {
-		return errors.New("nativeadi: transport isolation shim build failed")
+	if prepared := os.Getenv("APPLESERVICES_ADI_FENCE"); runtime.GOOS == "linux" && prepared != "" {
+		info, err := os.Stat(prepared)
+		if err != nil || !filepath.IsAbs(prepared) || !info.Mode().IsRegular() {
+			return errors.New("nativeadi: prepared transport fence is unavailable")
+		}
+		fence = prepared
+	} else {
+		compiler, err := exec.LookPath(compiler())
+		if err != nil {
+			return errors.New("nativeadi: native bridge compiler is required")
+		}
+		build := exec.CommandContext(ctx, compiler, arguments...)
+		backgroundexec.Configure(build)
+		build.Env = bridgeEnvironment()
+		if err := build.Run(); err != nil {
+			return errors.New("nativeadi: transport isolation shim build failed")
+		}
 	}
 	command := exec.Command(c.config.Python, "-u", filepath.Join(directory, "helper.py"))
 	backgroundexec.Configure(command)
 	// The helper needs no account secrets, including through inherited env vars.
 	command.Env = bridgeEnvironment()
+	if runtime.GOOS == "linux" {
+		// The container's Python launcher passes this to the guest loader only.
+		// Do not preload an x86 library into an ARM emulator process.
+		command.Env = append(command.Env, "APPLESERVICES_ADI_PRELOAD="+fence)
+		if runtime.GOARCH == "amd64" {
+			command.Env = append(command.Env, "LD_PRELOAD="+fence)
+		}
+	}
 	input, err := command.StdinPipe()
 	if err != nil {
 		return errors.New("nativeadi: bridge input unavailable")

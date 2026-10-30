@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+# All private native calls execute in an isolated x86 userspace. Go remains
+# native to the host architecture. No binfmt registration or privileged mode.
+root=/opt/adi-runtime
+export PYTHONHOME="$root/usr/local"
+loader="$root/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
+libraries="$root/usr/local/lib:$root/usr/lib/x86_64-linux-gnu"
+python="$root/usr/local/bin/python3.11"
+if [ "$(uname -m)" = x86_64 ]; then
+    if [ -n "${APPLESERVICES_ADI_PRELOAD:-}" ]; then
+        export LD_PRELOAD="$APPLESERVICES_ADI_PRELOAD"
+    fi
+    exec "$loader" --library-path "$libraries" "$python" "$@"
+fi
+if [ -n "${APPLESERVICES_ADI_PRELOAD:-}" ]; then
+    exec /usr/bin/qemu-x86_64-static -E "LD_PRELOAD=$APPLESERVICES_ADI_PRELOAD" \
+        "$loader" --library-path "$libraries" "$python" "$@"
+fi
+exec /usr/bin/qemu-x86_64-static -U LD_PRELOAD \
+    "$loader" --library-path "$libraries" "$python" "$@"

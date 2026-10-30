@@ -7,7 +7,12 @@
 extern void __attribute__((sysv_abi)) sub_ffffff8000ec7320(
     const unsigned char *input, uint64_t length, unsigned char *output);
 
-__declspec(dllexport) void mac_io_encrypt(
+#ifdef _WIN32
+__declspec(dllexport)
+#else
+__attribute__((visibility("default")))
+#endif
+void mac_io_encrypt(
     const unsigned char *input, uint64_t length, unsigned char *output) {
     sub_ffffff8000ec7320(input, length, output);
 }

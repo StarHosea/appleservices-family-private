@@ -35,3 +35,11 @@ SOFTWARE.
 The code under `internal/sap/` includes its own MIT license and copyright notice in [`internal/sap/LICENSE`](internal/sap/LICENSE). That license continues to govern the corresponding component.
 
 Additional dependencies may carry their own license files or notices. Nothing in the repository's top-level license removes rights or obligations under those separate licenses.
+
+## Optional container runtime
+
+The container build fetches the OpenBubbles `v1.15.0+205` Linux native module from its official release, verified against SHA256 `ce260415598b78c0810ae6b917145fbca804f6f19385ca9d34d55921d38210cf`. Its closed-source ADI implementation is not replaced by the public ClearADI stub, nor relicensed by this repository. No native module is committed here.
+
+The build also fetches pinned NAC tooling from [JJTech0130/pypush](https://github.com/JJTech0130/pypush/tree/f205e86bdf1a4ea5414a78985721c721039ada97/emulated), the reference `IMDAppleServices` image from [JJTech0130/nacserver](https://github.com/JJTech0130/nacserver/tree/0a2aa2406542fb09c14a37db17ff14865b8aea29), and the XNU property routine and conformance vectors from [OpenAbsinthe](https://github.com/mosessupposeshis/imessage/tree/be8d3f83be30a88dca26ee7ad1fb862b8af889e9/rustpush/open-absinthe). These externally fetched components retain their respective rights and licensing; the repository's license does not grant rights to Apple's binaries. No upstream hardware profile or account state is included.
+
+Python packages installed in the runtime retain their license metadata in their distribution directories. QEMU and its distribution copyright notices are installed by Debian's package manager. Go dependencies remain under their own module licenses.

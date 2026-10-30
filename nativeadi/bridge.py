@@ -3,6 +3,7 @@ import pathlib
 import struct
 import queue
 import hashlib
+import sys
 
 class SyncResult(C.Structure):
     _fields_ = [('ptr', C.c_void_p), ('length', C.c_int32)]
@@ -23,8 +24,10 @@ def encode_string(value):
 class Bridge:
     def __init__(self,library_path):
         path=pathlib.Path(library_path).resolve(strict=True)
-        if hashlib.sha256(path.read_bytes()).hexdigest()!='ca88e816dda449d7ba24d54a5ed709a2d392daeae28c25a61dcd2e7496e44cfe':
-            raise RuntimeError('native module hash does not match the verified Store release')
+        expected = {'win32': 'ca88e816dda449d7ba24d54a5ed709a2d392daeae28c25a61dcd2e7496e44cfe',
+                    'linux': 'ce260415598b78c0810ae6b917145fbca804f6f19385ca9d34d55921d38210cf'}.get(sys.platform)
+        if expected is None or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            raise RuntimeError('native module hash does not match the pinned upstream release')
         self.library=C.CDLL(str(path))
         self.library.frb_get_rust_content_hash.restype=C.c_int32
         if self.library.frb_get_rust_content_hash()!=-208244658:

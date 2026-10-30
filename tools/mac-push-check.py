@@ -10,7 +10,6 @@ import base64
 import hashlib
 import ctypes as C
 import json
-import msvcrt
 import os
 from pathlib import Path
 import plistlib
@@ -33,11 +32,13 @@ def main():
     null_fd = os.open(os.devnull, os.O_RDWR)
     os.dup2(null_fd, sys.stdout.fileno())
     os.dup2(null_fd, sys.stderr.fileno())
-    kernel = C.WinDLL("kernel32")
-    kernel.SetStdHandle.argtypes = [C.c_uint32, C.c_void_p]
-    kernel.SetStdHandle.restype = C.c_int
-    kernel.SetStdHandle(C.c_uint32(-11), msvcrt.get_osfhandle(null_fd))
-    kernel.SetStdHandle(C.c_uint32(-12), msvcrt.get_osfhandle(null_fd))
+    if sys.platform == "win32":
+        import msvcrt
+        kernel = C.WinDLL("kernel32")
+        kernel.SetStdHandle.argtypes = [C.c_uint32, C.c_void_p]
+        kernel.SetStdHandle.restype = C.c_int
+        kernel.SetStdHandle(C.c_uint32(-11), msvcrt.get_osfhandle(null_fd))
+        kernel.SetStdHandle(C.c_uint32(-12), msvcrt.get_osfhandle(null_fd))
     phase = "initialize"
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "nativeadi"))

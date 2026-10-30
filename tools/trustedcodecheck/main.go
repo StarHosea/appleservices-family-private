@@ -100,7 +100,7 @@ func run() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	library, _ := filepath.Abs(".cache/openbubbles-store/rust_lib_bluebubbles.dll")
+	library, _ := filepath.Abs(nativeadi.DefaultLibraryPath())
 	profile := filepath.Join(*dir, "native-adi")
 	token, err := hardwareToken(profile)
 	if err != nil {

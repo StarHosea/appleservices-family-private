@@ -1,0 +1,25 @@
+services:
+  appleservices:
+    build: .
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:18741:18741"
+    environment:
+      APPLESERVICES_PUBLIC_URL: ${APPLESERVICES_PUBLIC_URL:-http://127.0.0.1:18741}
+      APPLESERVICES_ADMIN_TOKEN_FILE: /run/secrets/admin_token
+    secrets:
+      - admin_token
+    volumes:
+      - account-data:/data
+    stop_grace_period: 60s
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  admin_token:
+    file: ./secrets/admin_token
+
+volumes:
+  account-data:

@@ -66,7 +66,7 @@ func main() {
 	}
 
 	// Local native ADI provider.
-	library, _ := filepath.Abs(".cache/openbubbles-store/rust_lib_bluebubbles.dll")
+	library, _ := filepath.Abs(nativeadi.DefaultLibraryPath())
 	client, err := nativeadi.NewClient(nativeadi.Config{
 		LibraryPath: library, ProfileDir: filepath.Join(dir, "adi-cmp"),
 		Python: "python", Identifier: d.Identifier, Serial: d.SerialNumber,

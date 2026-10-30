@@ -155,7 +155,7 @@ func run() error {
 	if _, err := plist.Unmarshal(data, &hardware); err != nil || len(hardware.Push.Token) != 32 {
 		return fmt.Errorf("APS token unavailable")
 	}
-	library, _ := filepath.Abs(".cache/openbubbles-store/rust_lib_bluebubbles.dll")
+	library, _ := filepath.Abs(nativeadi.DefaultLibraryPath())
 	native, err := nativeadi.NewClient(nativeadi.Config{LibraryPath: library, ProfileDir: profile, Python: "python", Identifier: device.Identifier, Serial: device.SerialNumber, PushToken: hardware.Push.Token})
 	if err != nil {
 		return err

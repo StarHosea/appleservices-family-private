@@ -1,8 +1,8 @@
-"""Headless ADI bridge for the verified OpenBubbles Windows 1.18.800.0 module.
+"""Headless ADI bridge for the pinned OpenBubbles Windows and Linux modules.
 
 Only local ADI provisioning, authentication headers and six-digit generation are
 used. Account passwords/tokens are not input. The unused foreign APS transport
-is fenced; real push is owned by this project's Windows COM backend.
+is fenced; real push is owned by this project's separate APS client.
 """
 import base64
 import ctypes as C
@@ -13,7 +13,6 @@ import plistlib
 import struct
 import sys
 import uuid
-import msvcrt
 
 # Native provisioning contains direct stdout prints. Silence both CRT FDs and
 # Win32 handles before loading any native code, and reserve a private RPC writer.
@@ -21,11 +20,13 @@ rpc_output=os.fdopen(os.dup(sys.stdout.fileno()),'w',encoding='utf-8',buffering=
 null_fd=os.open(os.devnull,os.O_RDWR)
 os.dup2(null_fd,sys.stdout.fileno())
 os.dup2(null_fd,sys.stderr.fileno())
-kernel=C.WinDLL('kernel32')
-kernel.SetStdHandle.argtypes=[C.c_uint32,C.c_void_p]
-kernel.SetStdHandle.restype=C.c_int
-kernel.SetStdHandle(C.c_uint32(-11),msvcrt.get_osfhandle(null_fd))
-kernel.SetStdHandle(C.c_uint32(-12),msvcrt.get_osfhandle(null_fd))
+if sys.platform == 'win32':
+    import msvcrt
+    kernel=C.WinDLL('kernel32')
+    kernel.SetStdHandle.argtypes=[C.c_uint32,C.c_void_p]
+    kernel.SetStdHandle.restype=C.c_int
+    kernel.SetStdHandle(C.c_uint32(-11),msvcrt.get_osfhandle(null_fd))
+    kernel.SetStdHandle(C.c_uint32(-12),msvcrt.get_osfhandle(null_fd))
 
 from bridge import Bridge, encode_string
 
@@ -73,10 +74,13 @@ class Provider:
         self.profile=pathlib.Path(request['profile']).resolve()
         self.profile.mkdir(parents=True,exist_ok=True)
         self.bridge=b=Bridge(request['library'])
-        self.fence=C.CDLL(str(pathlib.Path(request['fence']).resolve(strict=True)))
-        self.fence.InstallTransportFence.argtypes=[C.c_void_p]
-        self.fence.InstallTransportFence.restype=C.c_int
-        if self.fence.InstallTransportFence(b.library._handle)!=2: raise RuntimeError('private transport isolation failed')
+        if sys.platform == 'win32':
+            self.fence=C.CDLL(str(pathlib.Path(request['fence']).resolve(strict=True)))
+            self.fence.InstallTransportFence.argtypes=[C.c_void_p]
+            self.fence.InstallTransportFence.restype=C.c_int
+            if self.fence.InstallTransportFence(b.library._handle)!=2: raise RuntimeError('private transport isolation failed')
+        elif os.environ.get('LD_PRELOAD') != request['fence']:
+            raise RuntimeError('private transport isolation is unavailable')
         hardware_path=self.profile/'hw_info.plist'
         if not hardware_path.exists():
             mac_address=base64.b64decode(request['mac_address'],validate=True)

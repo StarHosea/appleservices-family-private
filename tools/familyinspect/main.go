@@ -503,7 +503,7 @@ func run() error {
 	if _, err := plist.Unmarshal(data, &hardware); err != nil || len(hardware.Push.Token) != 32 {
 		return errors.New("bound APS token unavailable")
 	}
-	library, _ := filepath.Abs(".cache/openbubbles-store/rust_lib_bluebubbles.dll")
+	library, _ := filepath.Abs(nativeadi.DefaultLibraryPath())
 	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
 	defer cancel()
 	native, err := nativeadi.NewClient(nativeadi.Config{LibraryPath: library, ProfileDir: profile, Python: "python", Identifier: device.Identifier, Serial: device.SerialNumber, PushToken: hardware.Push.Token})
@@ -1762,7 +1762,7 @@ func localFamilyVerificationCode(targetDir string) (string, error) {
 	if _, err = plist.Unmarshal(data, &hardware); err != nil || len(hardware.Push.Token) != 32 {
 		return "", errors.New("target local APS identity is unavailable")
 	}
-	library, _ := filepath.Abs(".cache/openbubbles-store/rust_lib_bluebubbles.dll")
+	library, _ := filepath.Abs(nativeadi.DefaultLibraryPath())
 	client, err := nativeadi.NewClient(nativeadi.Config{LibraryPath: library, ProfileDir: profile, Python: "python", Identifier: device.Identifier, Serial: device.SerialNumber, PushToken: hardware.Push.Token})
 	if err != nil {
 		return "", err

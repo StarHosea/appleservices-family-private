@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Laky-64/appleservices"
@@ -24,6 +25,7 @@ import (
 	"github.com/Laky-64/appleservices/icloud"
 	"github.com/Laky-64/appleservices/internal/circle"
 	"github.com/Laky-64/appleservices/internal/control"
+	"github.com/Laky-64/appleservices/internal/platform"
 	"github.com/Laky-64/appleservices/nativeadi"
 )
 
@@ -55,8 +57,8 @@ func run() (runErr error) {
 	probeNative := flag.Bool("probe-native-push", false, "check native token and local callback; no account registration")
 	listenOnly := flag.Bool("listen-only", false, "register and observe notifications; do not approve requests or generate codes")
 	listenFor := flag.Duration("listen-for", 0, "stop after this duration; 0 keeps listening")
-	useNativeADI := flag.Bool("native-adi", false, "generate headers and verification codes with the verified Windows native ADI module")
-	adiLibrary := flag.String("adi-dll", "./.cache/openbubbles-store/rust_lib_bluebubbles.dll", "verified OpenBubbles 1.18.800.0 native module path")
+	useNativeADI := flag.Bool("native-adi", false, "generate headers and verification codes with the pinned native ADI module")
+	adiLibrary := flag.String("adi-dll", nativeadi.DefaultLibraryPath(), "pinned OpenBubbles native module path")
 	python := flag.String("python", "python", "64-bit Python executable for the native ADI bridge")
 	background := flag.Bool("background", false, "keep running with closed stdin; never approve requests or log generated codes")
 	refreshEvery := flag.Duration("refresh-every", 10*time.Minute, "refresh account authentication, registration and device status at this interval")
@@ -194,7 +196,7 @@ func run() (runErr error) {
 		defer panel.Close()
 		panelCommands = panel.Commands
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	go watchStop(ctx, cancel, *dir, status.PID)
 	if *listenFor > 0 {
@@ -871,7 +873,7 @@ func run() (runErr error) {
 			if execErr != nil {
 				return control.Result{Message: "家庭工具不可用", Stage: "family-worker"}
 			}
-			helper := filepath.Join(filepath.Dir(executable), "familyinspect.exe")
+			helper := filepath.Join(filepath.Dir(executable), platform.Executable("familyinspect"))
 			if info, statErr := os.Stat(helper); statErr != nil || !info.Mode().IsRegular() {
 				return control.Result{Message: "家庭工具不可用", Stage: "family-worker"}
 			}

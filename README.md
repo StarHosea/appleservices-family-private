@@ -1,4 +1,4 @@
-# appleservices — iCloud 登录与 Windows 验证码
+# appleservices — iCloud 登录与跨平台服务端
 
 > [!WARNING]
 > 本项目是非官方、仅限非商业用途的源码公开项目，与 Apple Inc. 无关联或授权关系。
@@ -14,6 +14,12 @@
 不保证本程序出现在 Apple 账号设备列表，也不表示它成为能接收后续 2FA 的受信任设备。
 `state/device.json` 保存稳定认证身份。普通登录的验证码需手动输入；
 Windows 本机验证码入口见下文。
+
+## Linux ARM64 / macOS 服务端
+
+新增 `cmd/server` 和 Docker Compose 部署入口，沿用完整多账号 WebUI，包含本机六位码、独立账号推送身份、家庭、储存/订阅和隐藏邮件地址功能。无需 Windows 或实体 Apple 设备；ARM64 容器内的 ADI 模块使用 x86 用户态指令模拟，macOS 使用同一 Linux 容器。
+
+部署、管理员认证、状态持久化与真实运行时检查见 [服务端部署说明](docs/server-deployment.md)。Apple 首次账号验证及真实业务验收仍须分别完成。
 
 ## Windows 运行
 

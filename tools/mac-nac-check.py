@@ -1,4 +1,4 @@
-"""Mac NAC emulation on Windows using pinned pypush hooks and local hardware.
+"""Mac NAC emulation on Windows/Linux using pinned hooks and a private profile.
 
 Third-party runtime belongs in --runtime; no donor data.plist is used. Missing
 board fields can be filled with explicitly synthetic diagnostic values, whose
@@ -54,7 +54,8 @@ def main():
         synthetic = True
     if len(hw["rom"]) != 6 or not hw["mlb"]:
         raise SystemExit("Invalid ROM/MLB input lengths")
-    ctypes.windll.kernel32.SetErrorMode(0x8003)
+    if sys.platform == "win32":
+        ctypes.windll.kernel32.SetErrorMode(0x8003)
     lib = ctypes.CDLL(str(dll))
     encrypt = lib.mac_io_encrypt
     encrypt.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_void_p]
@@ -101,7 +102,7 @@ def main():
     emu_start = j.uc.emu_start
 
     def bounded_start(begin, until, *unused, **kwargs):
-        emu_start(begin, until, timeout=20_000_000, count=500_000_000)
+        emu_start(begin, until, timeout=60_000_000, count=500_000_000)
         if j.uc.reg_read(UC_X86_REG_RIP) != until:
             print(json.dumps({"stage": "emulation-budget", "instruction": hex(j.uc.reg_read(UC_X86_REG_RIP))}), flush=True)
             raise RuntimeError("NAC emulation did not return within its budget")

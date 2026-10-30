@@ -15,8 +15,8 @@ import (
 )
 
 func TestRejectUnverifiedLibrary(t *testing.T) {
-	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
-		t.Skip("Windows x64 validation")
+	if runtime.GOOS != "linux" && (runtime.GOOS != "windows" || runtime.GOARCH != "amd64") {
+		t.Skip("native module validation on Windows x64 and Linux")
 	}
 	path := filepath.Join(t.TempDir(), "unverified.dll")
 	if err := os.WriteFile(path, []byte("not the signed release"), 0600); err != nil {
