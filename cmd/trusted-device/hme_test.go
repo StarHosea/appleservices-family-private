@@ -22,6 +22,18 @@ func TestReachableVerificationReconcilesAppliedAppleMutation(t *testing.T) {
 	}
 }
 
+func TestHMESessionFailureOffersWebAuthentication(t *testing.T) {
+	for _, err := range []error{icloud.ErrHMEPasswordRequired, icloud.ErrHMEAuthenticationRequired} {
+		result := hmeSessionFailure(err)
+		if result.OK || result.Stage != "hme-auth-required" {
+			t.Fatalf("missing Web session did not offer authentication: %s", result.Stage)
+		}
+	}
+	if result := hmeSessionFailure(icloud.ErrHMEWebRepairRequired); result.Stage != "hme-terms-required" {
+		t.Fatal("terms blocker was confused with missing credentials")
+	}
+}
+
 func TestRequireHMEFamilyMemberRejectsOrganizerAndStaleCache(t *testing.T) {
 	now := time.Now().UTC()
 	write := func(dir string, checkedAt time.Time, family control.FamilyInfo) {

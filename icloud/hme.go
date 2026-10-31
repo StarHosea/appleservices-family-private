@@ -14,7 +14,6 @@ import (
 	"io"
 	"math/big"
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -33,6 +32,8 @@ const (
 
 var (
 	ErrHMEAuthenticationRequired      = errors.New("hide my email web authentication required")
+	ErrHMEPasswordRequired            = errors.New("隐藏邮件会话尚未建立或已过期，请验证当前账号密码")
+	ErrHMELimitReached                = errors.New("Apple 返回隐藏邮件地址数量已达上限，无法生成新候选")
 	ErrHMEWebRepairRequired           = errors.New("Apple 要求先接受当前 iCloud Web 条款")
 	ErrHMEWebRepairSessionUnavailable = errors.New("没有可复用的 iCloud Web repair 会话")
 )
@@ -58,12 +59,14 @@ type HideMyEmailInfo struct {
 }
 
 type hmeCookie struct {
-	Scope   string    `json:"scope"`
-	Name    string    `json:"name"`
-	Value   string    `json:"value"`
-	Path    string    `json:"path,omitempty"`
-	Secure  bool      `json:"secure,omitempty"`
-	Expires time.Time `json:"expires,omitempty"`
+	Scope    string    `json:"scope"`
+	Name     string    `json:"name"`
+	Value    string    `json:"value"`
+	Path     string    `json:"path,omitempty"`
+	Domain   string    `json:"domain,omitempty"`
+	Secure   bool      `json:"secure,omitempty"`
+	HTTPOnly bool      `json:"http_only,omitempty"`
+	Expires  time.Time `json:"expires,omitempty"`
 }
 
 type hmeSession struct {
@@ -72,6 +75,9 @@ type hmeSession struct {
 	ClientID       string      `json:"client_id"`
 	ServiceURL     string      `json:"service_url"`
 	AccountCountry string      `json:"account_country,omitempty"`
+	SetupURL       string      `json:"setup_url,omitempty"`
+	WebAuthToken   string      `json:"web_auth_token,omitempty"`
+	TrustToken     string      `json:"trust_token,omitempty"`
 	Cookies        []hmeCookie `json:"cookies"`
 	UpdatedAt      time.Time   `json:"updated_at"`
 }
@@ -106,7 +112,7 @@ func NewHideMyEmailClient(accountDir, appleID string) (*HideMyEmailClient, error
 }
 
 func (c *HideMyEmailClient) resetHTTP() {
-	jar, _ := cookiejar.New(nil)
+	jar := newHMECookieJar()
 	transport := gsa.AppleRootTransport().(*http.Transport)
 	transport.Proxy = nil
 	c.jar = jar
@@ -127,16 +133,19 @@ func (c *HideMyEmailClient) loadSession() error {
 		return err
 	}
 	var saved hmeSession
-	if json.Unmarshal(data, &saved) != nil || !strings.EqualFold(saved.AppleID, c.appleID) || saved.DSID == "" || saved.ServiceURL == "" || saved.ClientID == "" {
+	if len(data) > 2<<20 || json.Unmarshal(data, &saved) != nil || !strings.EqualFold(saved.AppleID, c.appleID) || saved.ClientID == "" || (saved.WebAuthToken == "" && (saved.DSID == "" || saved.ServiceURL == "")) {
 		return errors.New("hide my email session binding is invalid")
 	}
 	c.session = saved
+	if saved.SetupURL == "https://setup.icloud.com/setup/ws/1" || saved.SetupURL == "https://setup.icloud.com.cn/setup/ws/1" {
+		c.setupBase = saved.SetupURL
+	}
 	for _, item := range saved.Cookies {
 		u, parseErr := url.Parse(item.Scope)
 		if parseErr != nil || u.Scheme != "https" || u.Hostname() == "" || item.Name == "" {
 			continue
 		}
-		c.jar.SetCookies(u, []*http.Cookie{{Name: item.Name, Value: item.Value, Path: item.Path, Secure: item.Secure, Expires: item.Expires}})
+		c.jar.SetCookies(u, []*http.Cookie{{Name: item.Name, Value: item.Value, Path: item.Path, Domain: item.Domain, Secure: item.Secure, HttpOnly: item.HTTPOnly, Expires: item.Expires}})
 	}
 	return nil
 }
@@ -145,9 +154,15 @@ func (c *HideMyEmailClient) saveSession() error {
 	c.session.AppleID = c.appleID
 	c.session.UpdatedAt = time.Now().UTC()
 	c.session.Cookies = nil
+	if jar, ok := c.jar.(*hmeCookieJar); ok {
+		c.session.Cookies = jar.snapshot()
+	}
 	scopes := []string{c.authBase, c.setupBase, "https://www.icloud.com", c.session.ServiceURL}
 	seen := map[string]bool{}
 	for _, scope := range scopes {
+		if _, tracked := c.jar.(*hmeCookieJar); tracked {
+			break
+		}
 		u, err := url.Parse(scope)
 		if err != nil || u.Hostname() == "" {
 			continue
@@ -169,11 +184,22 @@ func (c *HideMyEmailClient) saveSession() error {
 	if err := os.MkdirAll(filepath.Dir(c.sessionPath), 0700); err != nil {
 		return err
 	}
-	temp := c.sessionPath + ".tmp"
-	if err := os.WriteFile(temp, data, 0600); err != nil {
+	temp, err := os.CreateTemp(filepath.Dir(c.sessionPath), ".hme-session-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(temp, c.sessionPath)
+	defer os.Remove(temp.Name())
+	if _, err = temp.Write(data); err == nil {
+		err = temp.Sync()
+	}
+	closeErr := temp.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(temp.Name(), c.sessionPath)
 }
 
 type hmeAuthState struct {
@@ -220,7 +246,7 @@ func (c *HideMyEmailClient) authHeaders(state *hmeAuthState) http.Header {
 	}
 	h.Set("X-Apple-OAuth-Client-Id", state.clientID)
 	h.Set("X-Apple-OAuth-Client-Type", "firstPartyAuth")
-	h.Set("X-Apple-OAuth-Redirect-URI", "https://www.icloud.com")
+	h.Set("X-Apple-OAuth-Redirect-URI", c.webOrigin())
 	h.Set("X-Apple-OAuth-Require-Grant-Code", "true")
 	h.Set("X-Apple-OAuth-Response-Mode", "web_message")
 	h.Set("X-Apple-OAuth-Response-Type", "code")
@@ -266,6 +292,15 @@ func (c *HideMyEmailClient) Authenticate(ctx context.Context, password string, c
 	return c.authenticate(ctx, password, codeProvider, false)
 }
 
+// Refresh re-establishes Web cookies from this account's saved Apple Web token.
+// It does not use a password, issue a verification challenge, or accept terms.
+func (c *HideMyEmailClient) Refresh(ctx context.Context) error {
+	if c.session.WebAuthToken == "" {
+		return ErrHMEAuthenticationRequired
+	}
+	return c.accountLogin(ctx, &hmeAuthState{sessionToken: c.session.WebAuthToken, trustToken: c.session.TrustToken, accountCountry: c.session.AccountCountry}, false)
+}
+
 // AuthenticateAndAcceptTerms creates a fresh iCloud Web session and accepts
 // the exact iCloud terms version Apple advertises for this account. Callers
 // must obtain explicit user authorization immediately before invoking it.
@@ -279,7 +314,9 @@ func (c *HideMyEmailClient) AcceptPendingTerms(ctx context.Context) error {
 	setupBase := c.setupBase
 	locale := "en-us"
 	if strings.EqualFold(c.session.AccountCountry, "CHN") || strings.EqualFold(c.session.AccountCountry, "CN") {
-		setupBase = "https://setup.icloud.com.cn/setup/ws/1"
+		if c.session.SetupURL == "" {
+			setupBase = "https://setup.icloud.com.cn/setup/ws/1"
+		}
 		locale = "zh-cn"
 	}
 	setupURL, err := url.Parse(setupBase)
@@ -304,11 +341,21 @@ func (c *HideMyEmailClient) AcceptPendingTerms(ctx context.Context) error {
 
 func (c *HideMyEmailClient) authenticate(ctx context.Context, password string, codeProvider func(context.Context) (string, error), acceptTerms bool) error {
 	if password == "" {
-		return errors.New("hide my email web login requires the current account password")
+		return ErrHMEPasswordRequired
 	}
-	c.resetHTTP()
+	return c.authenticateAttempt(ctx, password, codeProvider, acceptTerms)
+}
+
+func (c *HideMyEmailClient) webOrigin() string {
+	if c.setupBase == "https://setup.icloud.com.cn/setup/ws/1" {
+		return "https://www.icloud.com.cn"
+	}
+	return "https://www.icloud.com"
+}
+
+func (c *HideMyEmailClient) authenticateAttempt(ctx context.Context, password string, codeProvider func(context.Context) (string, error), acceptTerms bool) error {
 	state := &hmeAuthState{frameID: randomHex(16), clientID: hmeOAuthClient}
-	query := url.Values{"frame_id": {"auth-" + state.frameID}, "language": {"en_US"}, "skVersion": {"7"}, "iframeId": {"auth-" + state.frameID}, "client_id": {state.clientID}, "redirect_uri": {"https://www.icloud.com"}, "response_type": {"code"}, "response_mode": {"web_message"}, "state": {"auth-" + state.frameID}, "authVersion": {"latest"}}
+	query := url.Values{"frame_id": {"auth-" + state.frameID}, "language": {"en_US"}, "skVersion": {"7"}, "iframeId": {"auth-" + state.frameID}, "client_id": {state.clientID}, "redirect_uri": {c.webOrigin()}, "response_type": {"code"}, "response_mode": {"web_message"}, "state": {"auth-" + state.frameID}, "authVersion": {"latest"}}
 	startHeaders := make(http.Header)
 	startHeaders.Set("Accept", "*/*")
 	startHeaders.Set("User-Agent", hmeWebUserAgent)
@@ -357,7 +404,11 @@ func (c *HideMyEmailClient) authenticate(ctx context.Context, password string, c
 	if proofErr != nil {
 		return proofErr
 	}
-	completeBody, _ := json.Marshal(map[string]any{"accountName": c.appleID, "rememberMe": true, "trustTokens": []string{}, "m1": base64.StdEncoding.EncodeToString(m1), "c": state.srpSession, "m2": base64.StdEncoding.EncodeToString(m2)})
+	trustTokens := []string{}
+	if c.session.TrustToken != "" {
+		trustTokens = append(trustTokens, c.session.TrustToken)
+	}
+	completeBody, _ := json.Marshal(map[string]any{"accountName": c.appleID, "rememberMe": true, "trustTokens": trustTokens, "m1": base64.StdEncoding.EncodeToString(m1), "c": state.srpSession, "m2": base64.StdEncoding.EncodeToString(m2)})
 	response, _, err = c.authRequest(ctx, state, http.MethodPost, c.authBase+"/signin/complete?isRememberMeEnabled=true", completeBody, c.authHeaders(state))
 	if err != nil {
 		return err
@@ -367,8 +418,11 @@ func (c *HideMyEmailClient) authenticate(ctx context.Context, password string, c
 			return ErrHMEAuthenticationRequired
 		}
 		response, _, err = c.authRequest(ctx, state, http.MethodPut, c.authBase+"/verify/trusteddevice/securitycode", nil, c.authHeaders(state))
-		if err != nil || response.StatusCode < 200 || response.StatusCode >= 300 {
+		if err != nil {
 			return errors.New("Apple trusted-device code request failed")
+		}
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			return fmt.Errorf("Apple trusted-device code request failed (HTTP %d)", response.StatusCode)
 		}
 		codeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		code, codeErr := codeProvider(codeCtx)
@@ -391,6 +445,16 @@ func (c *HideMyEmailClient) authenticate(ctx context.Context, password string, c
 	response, _, err = c.authRequest(ctx, state, http.MethodGet, c.authBase+"/2sv/trust", nil, c.authHeaders(state))
 	if err != nil || response.StatusCode < 200 || response.StatusCode >= 300 {
 		return errors.New("Apple web session trust failed")
+	}
+	// Save the verified Web login before setup routing or terms can interrupt
+	// activation. A restart can then retry setup without consuming another code.
+	c.session.AppleID, c.session.WebAuthToken = c.appleID, state.sessionToken
+	c.session.TrustToken, c.session.AccountCountry, c.session.SetupURL = state.trustToken, state.accountCountry, c.setupBase
+	if c.session.ClientID == "" {
+		c.session.ClientID = randomHex(16)
+	}
+	if err := c.saveSession(); err != nil {
+		return errors.New("无法保存当前账号的 iCloud Web 登录会话")
 	}
 	return c.accountLogin(ctx, state, acceptTerms)
 }
@@ -427,19 +491,30 @@ type hmeAccountLoginResult struct {
 
 func (c *HideMyEmailClient) accountLogin(ctx context.Context, state *hmeAuthState, acceptTerms bool) error {
 	setupBase := c.setupBase
-	if strings.EqualFold(state.accountCountry, "CHN") || strings.EqualFold(state.accountCountry, "CN") {
-		setupBase = "https://setup.icloud.com.cn/setup/ws/1"
-	}
 	loginBody, _ := json.Marshal(map[string]any{"dsWebAuthToken": state.sessionToken, "accountCountryCode": state.accountCountry, "extended_login": true, "trustToken": state.trustToken})
 	data, err := c.hmeSetupRequest(ctx, http.MethodPost, setupBase+"/accountLogin", loginBody)
+	var region *hmeRegionRedirectError
+	if errors.As(err, &region) && region.setupBase != setupBase {
+		// Apple's domainToUse is an application-level routing response. Keep
+		// the authenticated IDMS session and change only the setup origin;
+		// authenticating twice can consume the same trusted-device code twice.
+		c.setupBase, setupBase = region.setupBase, region.setupBase
+		data, err = c.hmeSetupRequest(ctx, http.MethodPost, setupBase+"/accountLogin", loginBody)
+	}
 	if err != nil {
-		return errors.New("Apple iCloud Web session establishment failed")
+		return fmt.Errorf("Apple iCloud Web session establishment failed: %w", err)
 	}
 	var result hmeAccountLoginResult
 	if json.Unmarshal(data, &result) != nil || result.DSInfo.DSID == "" {
 		return errors.New("iCloud+ Hide My Email is unavailable for this account")
 	}
 	if result.TermsUpdateNeeded {
+		c.session.DSID = result.DSInfo.DSID
+		c.session.ServiceURL = strings.TrimRight(result.Webservices["premiummailsettings"].URL, "/")
+		c.session.SetupURL = setupBase
+		if err := c.saveSession(); err != nil {
+			return errors.New("无法保存当前账号的 iCloud Web repair 会话")
+		}
 		if !acceptTerms {
 			return ErrHMEWebRepairRequired
 		}
@@ -455,7 +530,7 @@ func (c *HideMyEmailClient) accountLogin(ctx context.Context, state *hmeAuthStat
 	if result.Webservices["premiummailsettings"].URL == "" {
 		return errors.New("iCloud+ Hide My Email is unavailable for this account")
 	}
-	c.session = hmeSession{AppleID: c.appleID, DSID: result.DSInfo.DSID, ClientID: randomHex(16), ServiceURL: strings.TrimRight(result.Webservices["premiummailsettings"].URL, "/"), AccountCountry: state.accountCountry}
+	c.session = hmeSession{AppleID: c.appleID, DSID: result.DSInfo.DSID, ClientID: randomHex(16), ServiceURL: strings.TrimRight(result.Webservices["premiummailsettings"].URL, "/"), AccountCountry: state.accountCountry, SetupURL: setupBase, WebAuthToken: state.sessionToken, TrustToken: state.trustToken}
 	serviceURL, _ := url.Parse(c.session.ServiceURL)
 	if err := validateHMEWebCookies(c.jar.Cookies(serviceURL)); err != nil {
 		return err
@@ -470,8 +545,8 @@ func (c *HideMyEmailClient) hmeSetupRequest(ctx context.Context, method, endpoin
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "*/*")
-	request.Header.Set("Origin", "https://www.icloud.com")
-	request.Header.Set("Referer", "https://www.icloud.com/")
+	request.Header.Set("Origin", c.webOrigin())
+	request.Header.Set("Referer", c.webOrigin()+"/")
 	request.Header.Set("User-Agent", hmeWebUserAgent)
 	response, err := c.http.Do(request)
 	if err != nil {
@@ -479,10 +554,40 @@ func (c *HideMyEmailClient) hmeSetupRequest(ctx context.Context, method, endpoin
 	}
 	defer response.Body.Close()
 	data, readErr := io.ReadAll(io.LimitReader(response.Body, (4<<20)+1))
-	if readErr != nil || len(data) > 4<<20 || response.StatusCode < 200 || response.StatusCode >= 300 {
+	if readErr != nil || len(data) > 4<<20 {
 		return nil, errors.New("Apple iCloud Web setup request failed")
 	}
+	if response.StatusCode == http.StatusFound {
+		return nil, parseHMERegionRedirect(data)
+	}
+	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || response.StatusCode == 421 {
+		return nil, ErrHMEAuthenticationRequired
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("Apple iCloud Web setup returned HTTP %d", response.StatusCode)
+	}
 	return data, nil
+}
+
+type hmeRegionRedirectError struct{ setupBase string }
+
+func (e *hmeRegionRedirectError) Error() string {
+	return "Apple 要求使用账号所属地区的 iCloud Web 登录"
+}
+
+func parseHMERegionRedirect(data []byte) error {
+	var routing struct {
+		Domain string `json:"domainToUse"`
+	}
+	if json.Unmarshal(data, &routing) == nil {
+		switch strings.ToLower(strings.TrimSpace(routing.Domain)) {
+		case "icloud.com.cn":
+			return &hmeRegionRedirectError{setupBase: "https://setup.icloud.com.cn/setup/ws/1"}
+		case "icloud.com":
+			return &hmeRegionRedirectError{setupBase: "https://setup.icloud.com/setup/ws/1"}
+		}
+	}
+	return errors.New("Apple 返回了无法识别的 iCloud Web 地区跳转")
 }
 
 func (c *HideMyEmailClient) acceptHMEWebTerms(ctx context.Context, setupBase, locale string) error {
@@ -513,7 +618,7 @@ type hmeEnvelope struct {
 	Success bool            `json:"success"`
 	Result  json.RawMessage `json:"result"`
 	Error   *struct {
-		ErrorCode            int `json:"errorCode"`
+		ErrorCode            json.RawMessage `json:"errorCode"`
 		ErrorMessage, Reason string
 	} `json:"error"`
 }
@@ -555,7 +660,7 @@ func (c *HideMyEmailClient) request(ctx context.Context, method, path string, pa
 	request.Header.Set("Content-Type", "text/plain")
 	response, err := c.http.Do(request)
 	if err != nil {
-		return err
+		return errors.New("Hide My Email 网络请求失败，请稍后重试")
 	}
 	data, readErr := io.ReadAll(io.LimitReader(response.Body, (4<<20)+1))
 	response.Body.Close()
@@ -570,8 +675,16 @@ func (c *HideMyEmailClient) request(ctx context.Context, method, path string, pa
 	}
 	var envelope hmeEnvelope
 	if json.Unmarshal(data, &envelope) != nil || !envelope.Success {
-		if envelope.Error != nil && envelope.Error.ErrorCode != 0 {
-			return fmt.Errorf("Hide My Email rejected the request (code %d)", envelope.Error.ErrorCode)
+		if envelope.Error != nil {
+			code := strings.Trim(string(envelope.Error.ErrorCode), `"`)
+			if code == "-41012" {
+				return ErrHMELimitReached
+			}
+			if len(code) > 0 && len(code) <= 32 && strings.IndexFunc(code, func(r rune) bool {
+				return !(r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r == '-' || r == '_')
+			}) < 0 {
+				return fmt.Errorf("Hide My Email rejected the request (code %s)", code)
+			}
 		}
 		return errors.New("Hide My Email rejected the request")
 	}

@@ -485,7 +485,12 @@ func (s *Server) callFor(ctx context.Context, dir, path string, body any, result
 		data, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
 		return workerHTTPError(response.StatusCode, data, body)
 	}
-	if json.NewDecoder(io.LimitReader(response.Body, 128*1024)).Decode(result) != nil {
+	responseLimit := int64(128 << 10)
+	if action, ok := body.(control.Action); ok && strings.HasPrefix(action.Action, "hme-") {
+		responseLimit = 4 << 20
+	}
+	data, readErr := io.ReadAll(io.LimitReader(response.Body, responseLimit+1))
+	if readErr != nil || int64(len(data)) > responseLimit || json.Unmarshal(data, result) != nil {
 		return errors.New("后台返回了无效数据")
 	}
 	return nil

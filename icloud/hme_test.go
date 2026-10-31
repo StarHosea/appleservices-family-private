@@ -4,13 +4,150 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
+
+type hmeTestTransport func(*http.Request) (*http.Response, error)
+
+func (f hmeTestTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestHMERestoresPartialLoginAndRefreshesCookiesWithoutPassword(t *testing.T) {
+	dir := t.TempDir()
+	client, _ := NewHideMyEmailClient(dir, "member@example.test")
+	client.session = hmeSession{AppleID: client.appleID, ClientID: "test-client", WebAuthToken: "test-web-auth", TrustToken: "test-trust", AccountCountry: "CHN"}
+	if err := client.saveSession(); err != nil {
+		t.Fatal(err)
+	}
+	client, _ = NewHideMyEmailClient(dir, "member@example.test")
+	setupCalls := 0
+	transport := hmeTestTransport(func(r *http.Request) (*http.Response, error) {
+		status, body := http.StatusOK, `{"success":true,"result":{"hmeEmails":[]}}`
+		headers := make(http.Header)
+		if r.URL.Path == "/setup/ws/1/accountLogin" {
+			setupCalls++
+			var login map[string]any
+			if json.NewDecoder(r.Body).Decode(&login) != nil || login["dsWebAuthToken"] != "test-web-auth" || login["trustToken"] != "test-trust" {
+				t.Fatal("saved Web login was not reused")
+			}
+			if r.URL.Host == "setup.icloud.com" {
+				status = http.StatusFound
+				body = `{"domainToUse":"iCloud.com.cn"}`
+			} else {
+				if r.URL.Host != "setup.icloud.com.cn" || r.Header.Get("Origin") != "https://www.icloud.com.cn" {
+					t.Fatal("regional setup origin was not switched")
+				}
+				body = `{"dsInfo":{"dsid":"test-dsid"},"webservices":{"premiummailsettings":{"url":"https://p01-maildomainws.icloud.com.cn"}}}`
+				headers.Add("Set-Cookie", "X-APPLE-WEBAUTH-TOKEN=test-cookie; Domain=.icloud.com.cn; Path=/; Secure; HttpOnly")
+			}
+		} else if r.URL.Path == "/v2/hme/list" {
+			if cookie, err := r.Cookie("X-APPLE-WEBAUTH-TOKEN"); err != nil || cookie.Value != "test-cookie" {
+				t.Fatal("refreshed cookie missing")
+			}
+		} else {
+			t.Fatal("Web refresh attempted a new authentication challenge")
+		}
+		return &http.Response{StatusCode: status, Header: headers, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+	})
+	client.http.Transport = transport
+	if err := client.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if setupCalls != 2 {
+		t.Fatalf("setup calls = %d", setupCalls)
+	}
+	// A second process needs only the refreshed private session file.
+	restored, _ := NewHideMyEmailClient(dir, "member@example.test")
+	restored.http.Transport = transport
+	if _, err := restored.List(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if restored.setupBase != "https://setup.icloud.com.cn/setup/ws/1" || restored.session.WebAuthToken == "" {
+		t.Fatal("routing or renewal token did not survive restart")
+	}
+}
+
+func TestHMERejectsUnrecognizedRegionRedirect(t *testing.T) {
+	for _, body := range []string{`{"domainToUse":"attacker.example"}`, `{"domainToUse":"icloud.com.cn.attacker.example"}`, `{"domainToUse":"https://icloud.com.cn"}`} {
+		var redirect *hmeRegionRedirectError
+		if errors.As(parseHMERegionRedirect([]byte(body)), &redirect) {
+			t.Fatal("unrecognized redirect accepted")
+		}
+	}
+}
+
+func TestHMEGenerationExplainsAppleStringAndNumericQuotaErrors(t *testing.T) {
+	for _, code := range []string{`"-41012"`, `-41012`} {
+		client, _ := NewHideMyEmailClient(t.TempDir(), "member@example.test")
+		client.session = hmeSession{DSID: "test-dsid", ClientID: "test-client", ServiceURL: "https://p01-maildomainws.icloud.com"}
+		client.http.Transport = hmeTestTransport(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"success":false,"error":{"errorCode":` + code + `,"errorMessage":"Maximum aliases"}}`)), Request: r}, nil
+		})
+		if _, err := client.Generate(context.Background(), "zh-cn"); !errors.Is(err, ErrHMELimitReached) {
+			t.Fatalf("quota error was lost: %v", err)
+		}
+	}
+}
+
+func TestHMEPasswordlessRestartReusesAccountWebSession(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cookie, err := r.Cookie("X-APPLE-WEBAUTH-TOKEN")
+		if err != nil || cookie.Value != "test-web-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path == "/v2/hme/list" {
+			ioResult := map[string]any{"success": true, "result": map[string]any{"hmeEmails": []any{}}}
+			_ = json.NewEncoder(w).Encode(ioResult)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "result": map[string]string{"hme": "candidate@example.test"}})
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	client, err := NewHideMyEmailClient(dir, "member@example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.session = hmeSession{AppleID: client.appleID, DSID: "test-dsid", ClientID: "test-client", ServiceURL: server.URL}
+	u, _ := url.Parse(server.URL)
+	client.jar.SetCookies(u, []*http.Cookie{{Name: "X-APPLE-WEBAUTH-TOKEN", Value: "test-web-token", Secure: true}})
+	if err := client.saveSession(); err != nil {
+		t.Fatal(err)
+	}
+	stat, _ := os.Stat(filepath.Join(dir, "hme-session.json"))
+	if stat.Mode().Perm() != 0600 {
+		t.Fatal("Web session is not private")
+	}
+	restored, _ := NewHideMyEmailClient(dir, "MEMBER@example.test")
+	restored.http.Transport = server.Client().Transport
+	info, err := restored.List(context.Background())
+	if err != nil || info == nil || len(info.Aliases) != 0 {
+		t.Fatalf("passwordless empty list failed: %v", err)
+	}
+	if _, err := restored.Generate(context.Background(), "zh-cn"); err != nil {
+		t.Fatalf("passwordless candidate generation failed: %v", err)
+	}
+	other, _ := NewHideMyEmailClient(dir, "other@example.test")
+	if _, err := other.List(context.Background()); !errors.Is(err, ErrHMEAuthenticationRequired) {
+		t.Fatal("another account reused the saved Web session")
+	}
+}
+
+func TestHMEAuthenticationWithoutPasswordRequestsCredentials(t *testing.T) {
+	client, _ := NewHideMyEmailClient(t.TempDir(), "member@example.test")
+	if err := client.Authenticate(context.Background(), "", nil); !errors.Is(err, ErrHMEPasswordRequired) {
+		t.Fatalf("unexpected missing-password result: %v", err)
+	}
+}
 
 func TestHideMyEmailLifecycleBindsCurrentAlias(t *testing.T) {
 	var mu sync.Mutex

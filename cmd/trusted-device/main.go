@@ -573,12 +573,40 @@ func run() (runErr error) {
 		if !errors.Is(err, icloud.ErrHMEAuthenticationRequired) {
 			return info, err
 		}
+		// Prefer the account-bound saved Web token over a new password login.
+		// This also finishes setup interrupted by a container restart.
+		if refreshErr := hmeClient.Refresh(actionCtx); refreshErr == nil {
+			return hmeClient.List(actionCtx)
+		} else if !errors.Is(refreshErr, icloud.ErrHMEAuthenticationRequired) {
+			return nil, refreshErr
+		}
 		if err := hmeClient.Authenticate(actionCtx, password, generateCode); err != nil {
 			return nil, err
 		}
 		return hmeClient.List(actionCtx)
 	}
-	performAction := func(actionCtx context.Context, action, visibleRequestID, commandCode, commandLabel, commandNote string) control.Result {
+	performAction := func(actionCtx context.Context, action, visibleRequestID, commandCode, commandLabel, commandNote, commandPassword string) control.Result {
+		if action == "hme-authenticate" {
+			queryCtx, done := context.WithTimeout(actionCtx, 115*time.Second)
+			defer done()
+			if err := requireHMEFamilyMember(*dir, time.Now().UTC()); err != nil {
+				return control.Result{Message: err.Error(), Stage: "hme-family"}
+			}
+			client, err := icloud.NewHideMyEmailClient(*dir, appleID)
+			if err == nil {
+				err = client.Authenticate(queryCtx, commandPassword, generateCode)
+			}
+			commandPassword = ""
+			if err != nil {
+				return hmeSessionFailure(err)
+			}
+			hmeClient = client
+			info, err := hmeClient.List(queryCtx)
+			if err != nil {
+				return hmeSessionFailure(err)
+			}
+			return control.Result{OK: true, Message: "隐藏邮件会话已验证，已读取当前账号的地址", Stage: "hme-list", HideMyEmail: info}
+		}
 		if action == "hme-accept-terms" {
 			queryCtx, done := context.WithTimeout(actionCtx, 115*time.Second)
 			defer done()
@@ -613,7 +641,7 @@ func run() (runErr error) {
 			defer done()
 			info, err := loadHME(queryCtx)
 			if err != nil {
-				return control.Result{Message: "隐藏邮件地址会话未就绪：" + err.Error(), Stage: "hme-session"}
+				return hmeSessionFailure(err)
 			}
 			label := strings.TrimSpace(commandLabel)
 			note := strings.TrimSpace(commandNote)
@@ -627,6 +655,9 @@ func run() (runErr error) {
 			case "hme-generate":
 				candidate, generateErr := hmeClient.Generate(queryCtx, "zh-cn")
 				if generateErr != nil {
+					if errors.Is(generateErr, icloud.ErrHMELimitReached) {
+						return control.Result{Message: fmt.Sprintf("Apple 已拒绝生成：当前账号已有 %d 个隐藏邮件地址，数量已达上限（-41012）。", len(info.Aliases)), Stage: "hme-limit", HideMyEmail: info}
+					}
 					return control.Result{Message: "Apple 未返回可用的候选地址", Stage: "hme-generate"}
 				}
 				pendingHMECandidate = candidate
@@ -1319,7 +1350,8 @@ func run() (runErr error) {
 				command.Reply <- control.Result{Message: "请重新查看当前登录请求"}
 				continue
 			}
-			command.Reply <- performAction(command.Context, command.Action.Action, command.RequestID, command.Code, command.Label, command.Note)
+			command.Reply <- performAction(command.Context, command.Action.Action, command.RequestID, command.Code, command.Label, command.Note, command.Password)
+			command.Password = ""
 		case <-refresh.C:
 			result := renew()
 			if status.VerificationRequired {
@@ -1419,7 +1451,7 @@ func run() (runErr error) {
 			if choice != "devices" && choice != "refresh" && choice != "code" && choice != "allow" && choice != "deny" {
 				continue
 			}
-			result := performAction(ctx, choice, "", "", "", "")
+			result := performAction(ctx, choice, "", "", "", "", "")
 			if result.Code != "" {
 				fmt.Println("Apple verification code:", result.Code)
 			} else {

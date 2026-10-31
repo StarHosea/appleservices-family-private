@@ -132,3 +132,35 @@ func TestControlAcceptsHMEWebTermsAction(t *testing.T) {
 		t.Fatal("hme-accept-terms action was not delivered")
 	}
 }
+
+func TestControlHMEAuthenticationKeepsPasswordOutOfStateAndResponse(t *testing.T) {
+	dir := t.TempDir()
+	server, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	go func() {
+		command := <-server.Commands
+		command.Reply <- Result{OK: command.Action.Action == "hme-authenticate" && command.Password == "test-only-password"}
+	}()
+	request, _ := http.NewRequest("POST", server.Record.URL+"/action", bytes.NewBufferString(`{"action":"hme-authenticate","password":"test-only-password"}`))
+	request.Header.Set("X-Control-Token", server.Record.Token)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	data, _ := io.ReadAll(response.Body)
+	var result Result
+	if response.StatusCode != http.StatusOK || json.Unmarshal(data, &result) != nil || !result.OK || bytes.Contains(data, []byte("test-only-password")) {
+		t.Fatal("authentication password was lost or disclosed")
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, entry := range entries {
+		data, _ := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if bytes.Contains(data, []byte("test-only-password")) {
+			t.Fatal("authentication password was persisted")
+		}
+	}
+}

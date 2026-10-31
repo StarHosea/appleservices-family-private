@@ -11,8 +11,43 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Laky-64/appleservices/icloud"
 	"github.com/Laky-64/appleservices/internal/control"
 )
+
+func TestDashboardReadsLargeHMEPoolWithoutTruncation(t *testing.T) {
+	dir := t.TempDir()
+	executable, _ := os.Executable()
+	server, err := New(Config{Dir: dir, Worker: executable, Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.listener.Close()
+	controller, err := control.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controller.Close()
+	data, _ := json.Marshal(Status{PID: os.Getpid(), Running: true, Authenticated: true, State: "online"})
+	if err := os.WriteFile(filepath.Join(dir, "runtime.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	aliases := make([]icloud.HideMyEmailAlias, 750)
+	for i := range aliases {
+		aliases[i] = icloud.HideMyEmailAlias{Email: "alias@example.test", Label: strings.Repeat("label", 32), Note: strings.Repeat("note", 64), Active: true}
+	}
+	go func() {
+		command := <-controller.Commands
+		command.Reply <- control.Result{OK: true, HideMyEmail: &icloud.HideMyEmailInfo{Aliases: aliases, ActiveCount: len(aliases)}}
+	}()
+	var result control.Result
+	if err := server.call(context.Background(), "/action", control.Action{Action: "hme-list"}, &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.OK || result.HideMyEmail == nil || len(result.HideMyEmail.Aliases) != 750 {
+		t.Fatal("large alias list was truncated")
+	}
+}
 
 func TestDashboardRejectsCrossOriginAndMissingCapability(t *testing.T) {
 	server, err := New(Config{Dir: t.TempDir(), Port: 0})
