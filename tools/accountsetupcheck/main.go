@@ -413,6 +413,7 @@ func run() error {
 	}
 	if *checkpoint != "" {
 		fresh := appleservices.Session{AppleID: username, DSID: adsid, Tokens: map[string]string{}}
+		fresh.DeviceIdentityToken, _ = auth.SessionPayload["GsIdmsToken"].(string)
 		for service, value := range services {
 			if fields, ok := value.(map[string]any); ok {
 				if token, ok := fields["token"].(string); ok {
