@@ -236,6 +236,40 @@ func TestExplicitSMSPhoneStaysBoundWithoutMetadata(t *testing.T) {
 	}
 }
 
+func TestExistingSMSRetryKeepsPhoneBindingAfterCodeRejection(t *testing.T) {
+	c := NewClient(headerProvider{})
+	discoveries, submissions := 0, 0
+	c.transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method == "GET" && r.URL.Path == "/auth" {
+			discoveries++
+			return &http.Response{StatusCode: 201, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"trustedPhoneNumbers":[{"id":7}]}`))}, nil
+		}
+		if r.Method != "POST" || r.URL.Path != "/auth/verify/phone/securitycode" {
+			t.Fatal("unexpected verification request")
+		}
+		submissions++
+		body, err := io.ReadAll(r.Body)
+		if err != nil || !bytes.Contains(body, []byte(`"id":7`)) {
+			t.Fatal("SMS retry changed its phone binding")
+		}
+		if submissions == 1 {
+			return &http.Response{StatusCode: 400, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"serviceErrors":[{"code":"-21669","message":"private account message"}]}`))}, nil
+		}
+		return &http.Response{StatusCode: 204, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})
+	err := c.SubmitSMSCode("test-account", "test-idms", "123456")
+	var rejection *SecondFactorError
+	if !errors.As(err, &rejection) || rejection.HTTPStatus != 400 || rejection.Code != -21669 || strings.Contains(err.Error(), "private account message") {
+		t.Fatal("code rejection lost its safe status or leaked the response")
+	}
+	if err := c.SubmitSMSCode("test-account", "test-idms", "234567"); err != nil {
+		t.Fatal(err)
+	}
+	if discoveries != 1 || submissions != 2 || c.smsPhoneID != 7 {
+		t.Fatal("retry rediscovered SMS metadata and could replace the pending code")
+	}
+}
+
 func TestSMSLimitStopsBeforeSendingAndRedactsResponse(t *testing.T) {
 	c := NewClient(headerProvider{})
 	requests := 0

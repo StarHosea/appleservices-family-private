@@ -381,6 +381,10 @@ func (c *Client) SubmitSMSCode(dsid, idmsToken, code string) error {
 		if err != nil {
 			return err
 		}
+		// /auth may deliver a new SMS automatically. Retain its phone binding
+		// even if this code is rejected, so the next submission cannot trigger
+		// another discovery and replace the code the user just received.
+		c.smsPhoneID = phoneID
 	}
 
 	headers, err := c.twoFactorHeaders(dsid, idmsToken)
@@ -407,6 +411,9 @@ func (c *Client) SubmitSMSCode(dsid, idmsToken, code string) error {
 		http.CookieJar(c.cookieJar),
 		http.Timeout(10*time.Second),
 	)
+	if result != nil && (result.StatusCode < 200 || result.StatusCode >= 300) {
+		return secondFactorResponseError("submit sms code", result.StatusCode, result.Body)
+	}
 	if err != nil {
 		return fmt.Errorf("gsa: submit sms code: %w", err)
 	}
