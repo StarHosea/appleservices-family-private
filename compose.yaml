@@ -1,5 +1,6 @@
 services:
   appleservices:
+    image: ${APPLESERVICES_IMAGE:-ghcr.io/starhosea/appleservices-family-private}:${APPLESERVICES_TAG:-latest}
     build: .
     restart: unless-stopped
     init: true
@@ -7,9 +8,12 @@ services:
       - "127.0.0.1:18741:18741"
     environment:
       APPLESERVICES_PUBLIC_URL: ${APPLESERVICES_PUBLIC_URL:-http://127.0.0.1:18741}
+      APPLESERVICES_ADMIN_USERNAME: ${APPLESERVICES_ADMIN_USERNAME:-admin}
       APPLESERVICES_ADMIN_TOKEN_FILE: /run/secrets/admin_token
+      APPLESERVICES_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
     secrets:
       - admin_token
+      - admin_password
     volumes:
       - account-data:/data
     stop_grace_period: 60s
@@ -20,6 +24,8 @@ services:
 secrets:
   admin_token:
     file: ./secrets/admin_token
+  admin_password:
+    file: ./secrets/admin_password
 
 volumes:
   account-data:

@@ -34,6 +34,8 @@ func Main() {
 	listen := flag.String("listen", env("APPLESERVICES_LISTEN", ""), "listen address (host:port)")
 	publicURL := flag.String("public-url", env("APPLESERVICES_PUBLIC_URL", ""), "exact browser origin, e.g. https://apple.example.com")
 	tokenFile := flag.String("admin-token-file", env("APPLESERVICES_ADMIN_TOKEN_FILE", ""), "file containing the administrator token")
+	adminUsername := flag.String("admin-username", env("APPLESERVICES_ADMIN_USERNAME", "admin"), "administrator username for HTTP Basic authentication")
+	passwordFile := flag.String("admin-password-file", env("APPLESERVICES_ADMIN_PASSWORD_FILE", ""), "file containing the HTTP Basic administrator password")
 	healthcheck := flag.Bool("healthcheck", false, "check the local HTTP listener and exit")
 	flag.Parse()
 	if *healthcheck {
@@ -70,13 +72,22 @@ func Main() {
 		}
 		adminToken = strings.TrimSpace(string(data))
 	}
+	adminPassword := ""
+	if *passwordFile != "" {
+		data, err := os.ReadFile(*passwordFile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Cannot read admin password file")
+			os.Exit(1)
+		}
+		adminPassword = strings.TrimSpace(string(data))
+	}
 	absDir, _ := filepath.Abs(*dir)
 	absWorker, _ := filepath.Abs(*worker)
 	absLibrary, _ := filepath.Abs(*library)
 	absMacPushSetup, _ := filepath.Abs(*macPushSetup)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	server, err := dashboard.New(dashboard.Config{Dir: absDir, Worker: absWorker, Library: absLibrary, Python: *python, MacPushSetup: absMacPushSetup, Port: *port, Listen: *listen, PublicURL: strings.TrimRight(*publicURL, "/"), AdminToken: adminToken})
+	server, err := dashboard.New(dashboard.Config{Dir: absDir, Worker: absWorker, Library: absLibrary, Python: *python, MacPushSetup: absMacPushSetup, Port: *port, Listen: *listen, PublicURL: strings.TrimRight(*publicURL, "/"), AdminToken: adminToken, AdminUsername: *adminUsername, AdminPassword: adminPassword})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

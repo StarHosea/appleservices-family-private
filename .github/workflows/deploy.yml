@@ -1,0 +1,111 @@
+name: Build and deploy
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: appleservices-production
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/starhosea/appleservices-family-private
+  DEPLOY_DIR: /home/muhaoxing/apps/applefamily
+  DEPLOY_DOMAIN: applefamily.shaungdeng.space
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: metadata
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha
+            type=raw,value=latest
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          set -eu
+          test -n "$DEPLOY_SSH_KEY"
+          test -n "$DEPLOY_HOST"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+          ssh-keyscan -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+      - name: Copy deployment files
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -eu
+          target="$DEPLOY_USER@$DEPLOY_HOST"
+          ssh -i "$HOME/.ssh/deploy_key" "$target" "install -d -m 700 '$DEPLOY_DIR/secrets'"
+          scp -i "$HOME/.ssh/deploy_key" compose.yaml "$target:$DEPLOY_DIR/compose.yaml.new"
+          scp -i "$HOME/.ssh/deploy_key" deploy/nginx/$DEPLOY_DOMAIN.conf "$target:/tmp/$DEPLOY_DOMAIN.conf.new"
+      - name: Pull and restart service
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          set -eu
+          target="$DEPLOY_USER@$DEPLOY_HOST"
+          printf '%s' "$GHCR_TOKEN" | ssh -i "$HOME/.ssh/deploy_key" "$target" "docker login ghcr.io --username '$GHCR_USER' --password-stdin"
+          ssh -i "$HOME/.ssh/deploy_key" "$target" 'set -eu
+            test -s "$HOME/apps/applefamily/secrets/admin_token"
+            test -s "$HOME/apps/applefamily/secrets/admin_password"
+            mv "$HOME/apps/applefamily/compose.yaml.new" "$HOME/apps/applefamily/compose.yaml"
+            umask 077
+            printf "APPLESERVICES_IMAGE=ghcr.io/starhosea/appleservices-family-private\\nAPPLESERVICES_TAG=latest\\nAPPLESERVICES_PUBLIC_URL=http://applefamily.shaungdeng.space\\nAPPLESERVICES_ADMIN_USERNAME=mhx\\n" > "$HOME/apps/applefamily/.env.new"
+            mv "$HOME/apps/applefamily/.env.new" "$HOME/apps/applefamily/.env"
+            cd "$HOME/apps/applefamily"
+            docker compose pull appleservices
+            docker compose up -d --no-build --remove-orphans appleservices
+            curl --fail --silent --show-error --max-time 10 http://127.0.0.1:18741/healthz
+            printf "\\n"'
+      - name: Configure OpenResty proxy
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -eu
+          target="$DEPLOY_USER@$DEPLOY_HOST"
+          ssh -i "$HOME/.ssh/deploy_key" "$target" "set -eu
+            sudo install -o root -g root -m 0644 /tmp/$DEPLOY_DOMAIN.conf.new /opt/1panel/www/conf.d/$DEPLOY_DOMAIN.conf
+            sudo docker exec 1Panel-openresty-NhRG openresty -t
+            sudo docker exec 1Panel-openresty-NhRG openresty -s reload
+            rm -f /tmp/$DEPLOY_DOMAIN.conf.new"

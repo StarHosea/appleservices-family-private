@@ -30,6 +30,12 @@ func listenAddress(config Config) (string, error) {
 		if len(config.AdminToken) < 32 || strings.ContainsAny(config.AdminToken, "\r\n") {
 			return "", errors.New("server mode requires an admin token of at least 32 characters")
 		}
+		if config.AdminUsername != "" && (strings.ContainsAny(config.AdminUsername, "\r\n:") || strings.TrimSpace(config.AdminUsername) == "") {
+			return "", errors.New("server mode requires a valid administrator username")
+		}
+		if config.AdminPassword != "" && (len(config.AdminPassword) < 8 || strings.ContainsAny(config.AdminPassword, "\r\n")) {
+			return "", errors.New("server mode requires an admin password of at least 8 characters")
+		}
 	}
 	return address, nil
 }
@@ -49,7 +55,11 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	user, password, ok := r.BasicAuth()
-	if ok && user == "admin" && equalSecret(password, s.config.AdminToken) {
+	adminPassword := s.config.AdminPassword
+	if adminPassword == "" {
+		adminPassword = s.config.AdminToken
+	}
+	if ok && user == s.config.AdminUsername && equalSecret(password, adminPassword) {
 		return true
 	}
 	w.Header().Set("WWW-Authenticate", `Basic realm="Apple Services", charset="UTF-8"`)

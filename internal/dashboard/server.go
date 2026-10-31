@@ -32,6 +32,7 @@ var assets embed.FS
 type Config struct {
 	Dir, Worker, Library, Python, MacPushSetup string
 	Listen, PublicURL, AdminToken              string
+	AdminUsername, AdminPassword               string
 	Port                                       int
 }
 type Server struct {
@@ -122,6 +123,9 @@ func New(config Config) (*Server, error) {
 	if _, err = rand.Read(key); err != nil {
 		listener.Close()
 		return nil, err
+	}
+	if config.AdminUsername == "" {
+		config.AdminUsername = "admin"
 	}
 	s := &Server{config: config, listener: listener, token: hex.EncodeToString(key)}
 	s.provisionMacPush = s.runMacPushProvisioner

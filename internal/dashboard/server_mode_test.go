@@ -73,3 +73,34 @@ func TestServerAuthenticationProtectsPageAndAPI(t *testing.T) {
 		}
 	}
 }
+
+func TestServerAuthenticationUsesConfiguredBasicCredentials(t *testing.T) {
+	server, err := New(Config{
+		Dir:           t.TempDir(),
+		Listen:        "127.0.0.1:0",
+		PublicURL:     "https://apple.example",
+		AdminToken:    strings.Repeat("t", 40),
+		AdminUsername: "mhx",
+		AdminPassword: "mhx.PWD.2026",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.listener.Close()
+
+	request := httptest.NewRequest("GET", server.URL()+"/", nil)
+	request.SetBasicAuth("mhx", "mhx.PWD.2026")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("configured Basic credentials returned status %d", recorder.Code)
+	}
+
+	request = httptest.NewRequest("GET", server.URL()+"/", nil)
+	request.SetBasicAuth("admin", "mhx.PWD.2026")
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unexpected legacy username accepted: status %d", recorder.Code)
+	}
+}

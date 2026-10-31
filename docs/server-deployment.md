@@ -19,13 +19,14 @@ Go 服务和后台编译为目标架构。ADI 使用固定的上游 Linux x86_64
 ```sh
 mkdir -m 700 secrets
 openssl rand -hex 32 > secrets/admin_token
-chmod 444 secrets/admin_token
+printf '%s\n' 'change-this-password' > secrets/admin_password
+chmod 444 secrets/admin_token secrets/admin_password
 docker compose up -d --build
 ```
 
 `secrets/` 目录仅当前用户可访问；文件只读使非 root 容器用户能读取 Compose 挂载的 secret。目录及文件均已排除 Git 和 Docker 构建上下文。请使用密码管理器保存或读取此文件，不要把内容提交到仓库或写入日志。
 
-打开 `http://127.0.0.1:18741`。HTTP Basic 用户名为 `admin`，密码为 `secrets/admin_token` 文件中的内容。登录后的 WebUI 和以前的功能入口相同。
+打开 `http://127.0.0.1:18741`。HTTP Basic 用户名由 `APPLESERVICES_ADMIN_USERNAME` 设置（默认 `admin`），密码由 `secrets/admin_password` 提供；若未设置密码文件则兼容使用 `secrets/admin_token`。管理员 API 也可使用 `Authorization: Bearer` 携带 `secrets/admin_token` 的内容。密码文件至少 8 个字符，token 至少 32 个字符。
 
 “家庭共享”卡片可读取全部当前家庭成员的账号，并标记组织者（母号）及当前账号；组织者不必预先添加到本服务。成员账号只在管理员认证后的页面/API 中显示，并随读取时间保存在账号私有缓存中。工具通过临时私有文件传递这些字段，日志仍只输出数量与角色，不包含成员账号、DSID、联系方式或原始响应。升级后若只有旧的家庭摘要缓存，点击“重新核验 Apple”读取成员账号。
 
@@ -65,6 +66,8 @@ Compose 默认仅把端口发布到宿主机回环地址。使用 HTTPS 反向�
 | `APPLESERVICES_LISTEN` | HTTP 监听地址；容器默认 `0.0.0.0:18741` |
 | `APPLESERVICES_PUBLIC_URL` | 浏览器精确来源，不含路径 |
 | `APPLESERVICES_ADMIN_TOKEN_FILE` | 至少 32 字符的管理员凭据文件 |
+| `APPLESERVICES_ADMIN_USERNAME` | HTTP Basic 管理员用户名，默认 `admin` |
+| `APPLESERVICES_ADMIN_PASSWORD_FILE` | HTTP Basic 管理员密码文件，至少 8 字符 |
 | `APPLESERVICES_ADI_LIBRARY` | 固定 Linux 模块的路径；镜像已配置 |
 | `APPLESERVICES_ADI_FENCE` | 同一镜像编译的 ADI 辅助进程传输隔离库；镜像已配置 |
 
@@ -91,6 +94,28 @@ docker compose up -d --no-build
 ```
 
 该检查不等于真实账号受信任、六位码被 Apple 登录接受，或购买成功。登录/家庭/HME 等业务仍以 Apple 实际返回为准；迁移后的账号端到端验收与匿名运行时验收应分别记录。构建成功和 `/healthz` 正常不能替代这些验证。
+
+## GitHub Actions 自动部署
+
+`.github/workflows/deploy.yml` 会在 `master` 推送后构建并推送 `linux/arm64` GHCR 镜像，然后通过 SSH 登录服务器执行 `docker compose pull` 和重启。仓库需要配置以下 Actions secrets：
+
+```text
+DEPLOY_HOST=140.238.56.209
+DEPLOY_USER=muhaoxing
+DEPLOY_SSH_KEY=<服务器 SSH 私钥全文>
+```
+
+服务器首次部署前创建目录和两个运行时 secret。不要把这两个文件提交到仓库：
+
+```sh
+mkdir -p /home/muhaoxing/apps/applefamily/secrets
+chmod 700 /home/muhaoxing/apps/applefamily/secrets
+openssl rand -hex 32 > /home/muhaoxing/apps/applefamily/secrets/admin_token
+printf '%s\n' 'change-this-password' > /home/muhaoxing/apps/applefamily/secrets/admin_password
+chmod 600 /home/muhaoxing/apps/applefamily/secrets/admin_token /home/muhaoxing/apps/applefamily/secrets/admin_password
+```
+
+工作流会把域名反代配置写入服务器已有的 1Panel OpenResty，并将应用绑定到 `http://applefamily.shaungdeng.space`。请先添加 `applefamily.shaungdeng.space` 指向 `140.238.56.209` 的 A 记录；DNS 生效后，在 1Panel 为该域名申请 HTTPS 证书，并把反代配置的 `listen 80` 入口改为 HTTPS 重定向和证书配置。工作流不会覆盖 `account-data` 命名卷，也不会执行 `docker compose down -v`。
 
 NAC 所用上游 Python hooks、Apple 验证模块、XNU 汇编均固定版本/摘要。镜像构建时验证 XNU 全部五组上游已知答案；不会使用上游的 donor `data.plist`。Store/SAP 所需的独立校验资产由现有实现按需下载到容器缓存，账号状态与这些代码缓存分开。
 
