@@ -96,7 +96,15 @@ jobs:
             cd "$HOME/apps/applefamily"
             docker compose pull appleservices
             docker compose up -d --no-build --remove-orphans appleservices
-            curl --fail --silent --show-error --max-time 10 http://127.0.0.1:18741/healthz
+            attempt=0
+            until curl --fail --silent --show-error --max-time 10 http://127.0.0.1:18741/healthz; do
+              attempt=$((attempt + 1))
+              if [ "$attempt" -ge 30 ]; then
+                docker compose logs --tail 50 appleservices
+                exit 1
+              fi
+              sleep 2
+            done
             printf "\\n"'
       - name: Configure OpenResty proxy
         env:
