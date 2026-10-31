@@ -656,6 +656,7 @@ func run() (runErr error) {
 				candidate, generateErr := hmeClient.Generate(queryCtx, "zh-cn")
 				if generateErr != nil {
 					if errors.Is(generateErr, icloud.ErrHMELimitReached) {
+						info.GenerationLimited = true
 						return control.Result{Message: fmt.Sprintf("Apple 已拒绝生成：当前账号已有 %d 个隐藏邮件地址，数量已达上限（-41012）。", len(info.Aliases)), Stage: "hme-limit", HideMyEmail: info}
 					}
 					return control.Result{Message: "Apple 未返回可用的候选地址", Stage: "hme-generate"}

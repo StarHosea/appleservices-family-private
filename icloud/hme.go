@@ -50,12 +50,13 @@ type HideMyEmailAlias struct {
 }
 
 type HideMyEmailInfo struct {
-	Aliases         []HideMyEmailAlias `json:"aliases"`
-	ActiveCount     int                `json:"active_count"`
-	InactiveCount   int                `json:"inactive_count"`
-	ForwardToEmails []string           `json:"forward_to_emails,omitempty"`
-	SelectedForward string             `json:"selected_forward_to,omitempty"`
-	CheckedAt       time.Time          `json:"checked_at"`
+	Aliases           []HideMyEmailAlias `json:"aliases"`
+	ActiveCount       int                `json:"active_count"`
+	InactiveCount     int                `json:"inactive_count"`
+	ForwardToEmails   []string           `json:"forward_to_emails,omitempty"`
+	SelectedForward   string             `json:"selected_forward_to,omitempty"`
+	CheckedAt         time.Time          `json:"checked_at"`
+	GenerationLimited bool               `json:"generation_limited,omitempty"`
 }
 
 type hmeCookie struct {
@@ -70,16 +71,18 @@ type hmeCookie struct {
 }
 
 type hmeSession struct {
-	AppleID        string      `json:"apple_id"`
-	DSID           string      `json:"dsid"`
-	ClientID       string      `json:"client_id"`
-	ServiceURL     string      `json:"service_url"`
-	AccountCountry string      `json:"account_country,omitempty"`
-	SetupURL       string      `json:"setup_url,omitempty"`
-	WebAuthToken   string      `json:"web_auth_token,omitempty"`
-	TrustToken     string      `json:"trust_token,omitempty"`
-	Cookies        []hmeCookie `json:"cookies"`
-	UpdatedAt      time.Time   `json:"updated_at"`
+	AppleID              string      `json:"apple_id"`
+	DSID                 string      `json:"dsid"`
+	ClientID             string      `json:"client_id"`
+	ServiceURL           string      `json:"service_url"`
+	AccountCountry       string      `json:"account_country,omitempty"`
+	SetupURL             string      `json:"setup_url,omitempty"`
+	WebAuthToken         string      `json:"web_auth_token,omitempty"`
+	TrustToken           string      `json:"trust_token,omitempty"`
+	AliasCount           int         `json:"alias_count,omitempty"`
+	GenerationLimitCount int         `json:"generation_limit_count,omitempty"`
+	Cookies              []hmeCookie `json:"cookies"`
+	UpdatedAt            time.Time   `json:"updated_at"`
 }
 
 type HideMyEmailClient struct {
@@ -530,7 +533,7 @@ func (c *HideMyEmailClient) accountLogin(ctx context.Context, state *hmeAuthStat
 	if result.Webservices["premiummailsettings"].URL == "" {
 		return errors.New("iCloud+ Hide My Email is unavailable for this account")
 	}
-	c.session = hmeSession{AppleID: c.appleID, DSID: result.DSInfo.DSID, ClientID: randomHex(16), ServiceURL: strings.TrimRight(result.Webservices["premiummailsettings"].URL, "/"), AccountCountry: state.accountCountry, SetupURL: setupBase, WebAuthToken: state.sessionToken, TrustToken: state.trustToken}
+	c.session = hmeSession{AppleID: c.appleID, DSID: result.DSInfo.DSID, ClientID: randomHex(16), ServiceURL: strings.TrimRight(result.Webservices["premiummailsettings"].URL, "/"), AccountCountry: state.accountCountry, SetupURL: setupBase, WebAuthToken: state.sessionToken, TrustToken: state.trustToken, AliasCount: c.session.AliasCount, GenerationLimitCount: c.session.GenerationLimitCount}
 	serviceURL, _ := url.Parse(c.session.ServiceURL)
 	if err := validateHMEWebCookies(c.jar.Cookies(serviceURL)); err != nil {
 		return err
@@ -719,6 +722,12 @@ func (c *HideMyEmailClient) List(ctx context.Context) (*HideMyEmailInfo, error) 
 		}
 		info.Aliases = append(info.Aliases, alias)
 	}
+	c.session.AliasCount = len(info.Aliases)
+	if c.session.GenerationLimitCount > 0 && c.session.AliasCount < c.session.GenerationLimitCount {
+		c.session.GenerationLimitCount = 0
+	}
+	info.GenerationLimited = c.session.GenerationLimitCount > 0
+	_ = c.saveSession()
 	return info, nil
 }
 
@@ -764,11 +773,17 @@ func (c *HideMyEmailClient) Generate(ctx context.Context, language string) (stri
 		HME string `json:"hme"`
 	}
 	if err := c.request(ctx, http.MethodPost, "/v1/hme/generate", map[string]string{"langCode": language}, &result); err != nil {
+		if errors.Is(err, ErrHMELimitReached) && c.session.AliasCount > 0 {
+			c.session.GenerationLimitCount = c.session.AliasCount
+			_ = c.saveSession()
+		}
 		return "", err
 	}
 	if result.HME == "" {
 		return "", errors.New("Hide My Email did not return a candidate")
 	}
+	c.session.GenerationLimitCount = 0
+	_ = c.saveSession()
 	return result.HME, nil
 }
 

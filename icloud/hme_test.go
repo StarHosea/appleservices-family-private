@@ -97,6 +97,43 @@ func TestHMEGenerationExplainsAppleStringAndNumericQuotaErrors(t *testing.T) {
 	}
 }
 
+func TestHMEGenerationLimitSurvivesRestartAndClearsAfterSmallerList(t *testing.T) {
+	dir := t.TempDir()
+	count := 750
+	transport := hmeTestTransport(func(r *http.Request) (*http.Response, error) {
+		body := `{"success":false,"error":{"errorCode":"-41012"}}`
+		if r.URL.Path == "/v2/hme/list" {
+			aliases := make([]map[string]any, count)
+			for i := range aliases {
+				aliases[i] = map[string]any{"hme": "alias@example.test", "isActive": true}
+			}
+			data, _ := json.Marshal(map[string]any{"success": true, "result": map[string]any{"hmeEmails": aliases}})
+			body = string(data)
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+	})
+	client, _ := NewHideMyEmailClient(dir, "member@example.test")
+	client.session = hmeSession{AppleID: client.appleID, DSID: "test-dsid", ClientID: "test-client", ServiceURL: "https://p01-maildomainws.icloud.com"}
+	client.http.Transport = transport
+	if _, err := client.List(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Generate(context.Background(), "zh-cn"); !errors.Is(err, ErrHMELimitReached) {
+		t.Fatal("expected quota rejection")
+	}
+	restored, _ := NewHideMyEmailClient(dir, "member@example.test")
+	restored.http.Transport = transport
+	info, err := restored.List(context.Background())
+	if err != nil || !info.GenerationLimited {
+		t.Fatal("verified quota state was lost on restart")
+	}
+	count = 749
+	info, err = restored.List(context.Background())
+	if err != nil || info.GenerationLimited {
+		t.Fatal("smaller authoritative list did not allow retrying generation")
+	}
+}
+
 func TestHMEPasswordlessRestartReusesAccountWebSession(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("X-APPLE-WEBAUTH-TOKEN")
