@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,58 @@ import (
 	"github.com/Laky-64/appleservices"
 	"github.com/Laky-64/appleservices/anisette"
 )
+
+func TestFirstLoginCreatesAccountIdentityBeforePushBootstrap(t *testing.T) {
+	root := t.TempDir()
+	worker, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Config{Dir: root, Worker: worker, Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.listener.Close()
+	var firstIdentity []byte
+	calls := 0
+	server.provisionMacPush = func(_ context.Context, dir string) error {
+		calls++
+		if filepath.Dir(dir) != accountsDir(root) {
+			t.Fatal("first login bootstrapped outside its account directory")
+		}
+		data, err := os.ReadFile(filepath.Join(dir, "device.json"))
+		var device appleservices.Device
+		if err != nil || json.Unmarshal(data, &device) != nil || len(device.Identifier) != 16 || device.SerialNumber == "" {
+			t.Fatal("first login attempted APS before creating its device identity")
+		}
+		if firstIdentity == nil {
+			firstIdentity = append([]byte(nil), device.Identifier...)
+		} else if !bytes.Equal(firstIdentity, device.Identifier) {
+			t.Fatal("retry replaced the first account identity")
+		}
+		return errors.New("test: stop before network or worker launch")
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		request := httptest.NewRequest("POST", server.URL()+"/api/start", strings.NewReader(`{"apple_id":"first@example.test","password":"test-password","twofactor":"trusted-device"}`))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("X-App-Token", server.token)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != 200 || len(server.accounts) != 1 {
+			t.Fatal("first login did not register exactly one account")
+		}
+	}
+	if calls != 4 {
+		t.Fatalf("bootstrap calls = %d, want two attempts per login", calls)
+	}
+	if _, err := os.Stat(filepath.Join(root, "device.json")); !os.IsNotExist(err) {
+		t.Fatal("first login created a legacy shared identity")
+	}
+	entries, err := loadRegistry(root, "")
+	if err != nil || len(entries) != 1 || entries[0].Dir != server.accounts[0].Dir {
+		t.Fatal("first account registry was not persisted")
+	}
+}
 
 // TestAddingAccountDoesNotOverwriteExistingAccount is the regression test for
 // the reported bug: adding a second account used to relaunch the worker in the

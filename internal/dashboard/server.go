@@ -854,6 +854,12 @@ func (s *Server) Start(ctx context.Context, creds credentials) control.Result {
 	if account := s.lookup(""); account != nil {
 		return s.startAccount(ctx, account, creds)
 	}
+	// A fresh installation has no legacy identity to reconnect. Allocate the
+	// first account before APS bootstrap, just like the Add Account endpoint.
+	if _, err := os.Stat(filepath.Join(s.config.Dir, "device.json")); os.IsNotExist(err) {
+		result, _ := s.addAccount(ctx, creds)
+		return result
+	}
 	return s.startIn(ctx, s.config.Dir, creds, nil)
 }
 
