@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - codex/portable-container-server
   workflow_dispatch:
 
 permissions:
