@@ -62,6 +62,7 @@ test('missing management session offers inline authentication and clears its pas
   await f.run("action('hme-reachable-start',{code:'target@example.test'})");
   assert.equal(f.get('hmeReachableAuthForm').hidden,false);
   assert.equal(f.get('hmeReachablePassword').focused,true);
+  assert.equal(f.get('notice').hidden,true,'missing management session must stay in the reachable-email flow');
   f.get('hmeReachablePassword').value='test-only-password';
   const pending=f.get('hmeReachableAuthForm').listeners.submit({preventDefault(){}});
   assert.equal(f.get('hmeReachablePassword').value,'');

@@ -258,6 +258,9 @@ async function action(name,extra={},options={}){
 	  }
 	  if(name==='hme-reachable-start'&&['hme-reachable-auth-required','reconnect-required'].includes(result.stage)){
         $('hmeReachableAuthForm').hidden=false;
+		reachableStatus('请输入当前 Apple 账号密码后发送验证邮件；邮件尚未发送，密码不会保存。',true);
+		$('hmeReachableAuthForm').scrollIntoView?.({behavior:'smooth',block:'center'});
+		return;
       }
       if(name==='storage-authenticate'){
         $('storeAuthSummary').textContent=(result.message||'购买会话验证未完成')+detail;
