@@ -6,11 +6,45 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Laky-64/appleservices/internal/control"
 )
+
+func TestFamilyMemberAccountsCacheReplacesRosterAndRejectsInvalidBindings(t *testing.T) {
+	account := &Account{ID: "member", Dir: t.TempDir()}
+	family := &control.FamilyInfo{Member: true, Members: 2, Organizers: 1, Self: 1, MemberAccounts: []control.FamilyMember{
+		{AppleID: "organizer@example.test", Organizer: true},
+		{AppleID: "member@example.test", Self: true},
+	}}
+	if _, err := writeFamilyCache(account, family); err != nil {
+		t.Fatal(err)
+	}
+	got, _, stale := readFamilyCache(account)
+	if got == nil || stale || len(got.MemberAccounts) != 2 || !got.MemberAccounts[0].Organizer || !got.MemberAccounts[1].Self {
+		t.Fatal("cached member accounts lost their roles")
+	}
+	family.Members, family.Organizer = 1, true
+	family.MemberAccounts = []control.FamilyMember{{AppleID: "member@example.test", Self: true, Organizer: true}}
+	if _, err := writeFamilyCache(account, family); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(familyCachePath(account))
+	if err != nil || strings.Contains(string(data), "organizer@example.test") {
+		t.Fatal("old member account remained after a new snapshot")
+	}
+	family.MemberAccounts[0].Organizer = false
+	if _, err := writeFamilyCache(account, family); err == nil {
+		t.Fatal("mismatched self/organizer roles accepted")
+	}
+	family.MemberAccounts[0].Organizer = true
+	family.MemberAccounts[0].AppleID = "bad\naccount"
+	if _, err := writeFamilyCache(account, family); err == nil {
+		t.Fatal("invalid member account accepted")
+	}
+}
 
 func TestListAccountsResolvesOrganizerForEveryCachedMember(t *testing.T) {
 	root := t.TempDir()

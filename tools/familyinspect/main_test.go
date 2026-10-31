@@ -1,10 +1,62 @@
 package main
 
 import (
+	"encoding/json"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
+	"strings"
 	"testing"
+
+	"github.com/Laky-64/appleservices/internal/control"
 )
+
+func TestPrivateMemberAccountsExcludeOtherFamilyDataAndRefuseOverwrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "members.json")
+	members := []any{
+		map[string]any{"member-apple-id": "organizer@example.test", "member-is-organizer": true, "member-dsid": "private-dsid", "member-phone-numbers": []string{"private-phone"}},
+		map[string]any{"appleId": "member@example.test", "is-me": true, "member-date-of-birth": "private-birthday", "member-first-name": "private-name"},
+	}
+	if err := writeFamilyMemberAccounts(path, members); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "private-") || strings.Contains(string(data), "dsid") {
+		t.Fatal("member output contains fields beyond account and roles")
+	}
+	var accounts []control.FamilyMember
+	if json.Unmarshal(data, &accounts) != nil || len(accounts) != 2 || accounts[0].AppleID != "organizer@example.test" || !accounts[0].Organizer || accounts[1].AppleID != "member@example.test" || !accounts[1].Self {
+		t.Fatal("account and role bindings were not preserved")
+	}
+	if err := writeFamilyMemberAccounts(path, nil); err == nil {
+		t.Fatal("existing private member output was overwritten")
+	}
+	info, err := os.Stat(path)
+	if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0) {
+		t.Fatal("member account output must be owner-only")
+	}
+}
+
+func TestPrivateMemberAccountsKeepMissingOrInvalidAccountsAsUnknown(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "members.json")
+	members := []any{map[string]any{"is-me": true}, map[string]any{"appleId": "invalid\naccount"}}
+	if err := writeFamilyMemberAccounts(path, members); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var accounts []control.FamilyMember
+	if json.Unmarshal(data, &accounts) != nil || len(accounts) != 2 || accounts[0].AppleID != "" || !accounts[0].Self || accounts[1].AppleID != "" {
+		t.Fatal("missing accounts must not omit members or invent identifiers")
+	}
+}
 
 func TestSafeFamilyUIFormsOmitsValuesAndResolvesAppleAction(t *testing.T) {
 	origin, _ := url.Parse("https://setup.icloud.com/setup/mac/family/setupFamilyUI")

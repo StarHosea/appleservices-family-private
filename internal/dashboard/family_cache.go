@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Laky-64/appleservices/internal/control"
 )
@@ -32,6 +34,27 @@ func validCachedFamily(value *control.FamilyInfo) bool {
 		return false
 	}
 	if len(value.OrganizerName) > 128 || strings.ContainsAny(value.OrganizerName, "\r\n\x00") {
+		return false
+	}
+	if len(value.MemberAccounts) > 20 || (value.MemberAccounts != nil && len(value.MemberAccounts) != value.Members) {
+		return false
+	}
+	organizers, self := 0, 0
+	for _, member := range value.MemberAccounts {
+		if len(member.AppleID) > 254 || !utf8.ValidString(member.AppleID) || strings.ContainsFunc(member.AppleID, unicode.IsControl) {
+			return false
+		}
+		if member.Organizer {
+			organizers++
+		}
+		if member.Self {
+			self++
+			if member.Organizer != value.Organizer {
+				return false
+			}
+		}
+	}
+	if value.MemberAccounts != nil && (organizers != value.Organizers || self != value.Self) {
 		return false
 	}
 	return true

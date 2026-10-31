@@ -25,10 +25,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	appleservices "github.com/Laky-64/appleservices"
 	"github.com/Laky-64/appleservices/gsa"
 	"github.com/Laky-64/appleservices/icloud"
+	"github.com/Laky-64/appleservices/internal/control"
 	"github.com/Laky-64/appleservices/nativeadi"
 	"github.com/google/uuid"
 	"golang.org/x/net/html"
@@ -153,6 +156,37 @@ func familyMemberAppleID(member map[string]any) string {
 		return value
 	}
 	return stringValue(member["member-apple-id"])
+}
+
+// Member accounts are opt-in private output; safe-json remains a count/role
+// summary so subprocess diagnostics never contain account identifiers.
+func writeFamilyMemberAccounts(path string, members []any) error {
+	if len(members) > 20 {
+		return errors.New("family member count is invalid")
+	}
+	accounts := make([]control.FamilyMember, 0, len(members))
+	for _, raw := range members {
+		member, _ := raw.(map[string]any)
+		account := strings.TrimSpace(familyMemberAppleID(member))
+		if len(account) > 254 || !utf8.ValidString(account) || strings.ContainsFunc(account, unicode.IsControl) {
+			account = ""
+		}
+		accounts = append(accounts, control.FamilyMember{AppleID: account,
+			Organizer: boolValue(member["member-is-organizer"]), Self: boolValue(member["is-me"])})
+	}
+	data, err := json.Marshal(accounts)
+	if err != nil {
+		return errors.New("cannot encode private family member accounts")
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return errors.New("private family member output must be a new file")
+	}
+	_, writeErr := file.Write(data)
+	if closeErr := file.Close(); writeErr != nil || closeErr != nil {
+		return errors.New("cannot save private family member accounts")
+	}
+	return nil
 }
 
 func summarizeFamilyMembers(members []any) (organizers, children, me int, selfOrganizer bool, selfMember map[string]any) {
@@ -405,6 +439,7 @@ func run() error {
 	dir := flag.String("dir", "", "bound account directory")
 	gsaCheckpoint := flag.String("gsa", "", "optional fresh private GSA checkpoint for family app tokens")
 	dump := flag.String("dump", "", "new private raw family response")
+	membersOut := flag.String("members-out", "", "new private JSON file containing only member accounts and roles; never printed")
 	listEndpoints := flag.Bool("list-endpoints", false, "print safe family endpoint keys, hosts and paths")
 	inspectSetupUI := flag.Bool("inspect-setup-ui", false, "GET the current setup-family UI and print only safe form metadata")
 	setupUIDump := flag.String("setup-ui-dump", "", "new private raw setup-family UI response; requires -inspect-setup-ui")
@@ -1673,6 +1708,11 @@ func run() error {
 			return errors.New("shared iCloud+ plan was not confirmed for the current member")
 		}
 		fmt.Printf("shared iCloud+ member join verified; HTTP=%d participating=true available=true enabled=true\n", updateResponse.StatusCode)
+	}
+	if *membersOut != "" {
+		if err := writeFamilyMemberAccounts(*membersOut, members); err != nil {
+			return err
+		}
 	}
 	if *safeJSON {
 		summary := safeFamilySummary{

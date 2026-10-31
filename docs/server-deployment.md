@@ -27,6 +27,8 @@ docker compose up -d --build
 
 打开 `http://127.0.0.1:18741`。HTTP Basic 用户名为 `admin`，密码为 `secrets/admin_token` 文件中的内容。登录后的 WebUI 和以前的功能入口相同。
 
+“家庭共享”卡片可读取全部当前家庭成员的账号，并标记组织者（母号）及当前账号；组织者不必预先添加到本服务。成员账号只在管理员认证后的页面/API 中显示，并随读取时间保存在账号私有缓存中。工具通过临时私有文件传递这些字段，日志仍只输出数量与角色，不包含成员账号、DSID、联系方式或原始响应。升级后若只有旧的家庭摘要缓存，点击“重新核验 Apple”读取成员账号。
+
 ```sh
 docker compose ps
 docker compose logs --tail 30

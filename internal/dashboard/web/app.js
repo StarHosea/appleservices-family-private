@@ -26,10 +26,25 @@ function autoRefreshKey(kind,checkedAt){return selectedAccount+'|'+kind+'|'+(che
 function cacheLabel(kind,checkedAt,stale){if(!stale)return '已保存 · '+(checkedAt?time(checkedAt):'刚刚');const key=autoRefreshKey(kind,checkedAt),state=autoRefreshState.get(key)||autoRefreshAttemptStatus(key);if(state==='refreshing')return '正在后台核验 Apple…';if(state==='failed')return '自动核验失败 · '+(checkedAt?time(checkedAt):'刚刚');return '等待后台核验 · '+(checkedAt?time(checkedAt):'刚刚');}
 function renderStorage(info,{checkedAt='',stale=false}={}){storageAccount=selectedAccount;storageCheckedAt=checkedAt||'';const note=$('storageCacheNote');if(!info){$('storageSummary').textContent='登录后查询当前容量和使用情况。';note.textContent='尚无本地状态';note.classList.remove('stale');return;}const format=x=>(x/1073741824).toLocaleString('zh-CN',{maximumFractionDigits:2})+' GB';$('storageSummary').textContent='已用 '+format(info.used_bytes)+' / '+format(info.total_bytes)+' · 可用 '+format(info.available_bytes);note.textContent=cacheLabel('storage',checkedAt,stale);note.classList.toggle('stale',!!stale);}
 function updateFamilyCacheMeta(checkedAt='',stale=false,hasInfo=!!familyInfo){familyCheckedAt=checkedAt||'';familyStale=!!stale;const shell=$('familyCard');shell.classList.toggle('cache-stale',familyStale);if(!hasInfo){$('familyCacheNote').textContent='尚无本地状态';$('familyRefreshButton').textContent='读取家庭状态';return;}const key=autoRefreshKey('family',familyCheckedAt),state=autoRefreshState.get(key)||autoRefreshAttemptStatus(key);$('familyCacheNote').textContent=cacheLabel('family',familyCheckedAt,familyStale);$('familyRefreshButton').textContent=state==='refreshing'?'正在核验…':'重新核验 Apple';}
+function renderFamilyMemberAccounts(info){
+  const panel=$('familyMemberAccounts'),list=$('familyMemberList');list.replaceChildren();panel.hidden=!info?.member;
+  if(!info?.member)return;
+  if(!info.member_accounts?.length){const empty=document.createElement('li');empty.className='family-members-empty';empty.textContent='点击“重新核验 Apple”读取家庭成员账号。';list.append(empty);return;}
+  const members=[...info.member_accounts].sort((a,b)=>Number(b.organizer)-Number(a.organizer)||Number(b.self)-Number(a.self));
+  for(const member of members){
+    const row=document.createElement('li');row.className='family-member-row';row.classList.toggle('organizer',!!member.organizer);
+    const account=document.createElement('span');account.className='family-member-account';account.textContent=member.apple_id||'Apple 未返回此成员账号';
+    const tags=document.createElement('span');tags.className='family-member-tags';
+    const role=document.createElement('span');role.className='family-member-role';role.textContent=member.organizer?'组织者（母号）':'成员';tags.append(role);
+    if(member.self){const self=document.createElement('span');self.className='family-member-self';self.textContent='当前账号';tags.append(self);}
+    row.append(account,tags);list.append(row);
+  }
+}
 function renderFamily(info,{checkedAt='',stale=false,animate=true}={}){
   familyInfo=info||null;familyAccount=selectedAccount;
   const shell=$('familyCard'),card=$('familyStatus'),metrics=$('familyMetrics'),map=$('familyMap'),controls=$('familyControls'),removeControls=$('familyRemoveControls');card.className='family-status';
   updateFamilyCacheMeta(checkedAt,stale,!!info);
+  renderFamilyMemberAccounts(info);
   if(!info){$('familySummary').textContent='尚未读取家庭状态';$('familyDetail').textContent='操作前会实时核对成员、组织者和共享储存状态。';$('familyStatusChip').textContent='待读取';metrics.hidden=true;map.hidden=true;controls.hidden=true;removeControls.hidden=true;return;}
   if(info.organizer_account){poolOrganizerAccount=info.organizer_account;poolOrganizerName=info.organizer_name||info.organizer_account;localStorage.setItem('family-organizer-account',poolOrganizerAccount);localStorage.setItem('family-organizer-name',poolOrganizerName);}
   metrics.hidden=false;
@@ -40,7 +55,7 @@ function renderFamily(info,{checkedAt='',stale=false,animate=true}={}){
   $('familyMemberCount').textContent=info.members||'0';$('familyRole').textContent=info.organizer?'组织者':info.member?'成员':'未加入';
   $('familyStorageState').textContent=!info.storage_known?'未返回':info.storage_participating&&info.storage_available&&info.storage_enabled?'已启用':info.storage_available?'可加入':'未共享';
   $('familyStorageBytes').textContent=gib(info.storage_bytes);
-  if(info.member){const selected=current?.accounts?.find(account=>account.id===selectedAccount);const currentName=selected?.name||selectedAccount||'当前账号';$('familyOrganizerName').textContent=info.organizer_name||poolOrganizerName||'池外组织者';$('familyCurrentName').textContent=currentName;$('familyCurrentAvatar').textContent=(currentName||'A').slice(0,1).toUpperCase();map.classList.toggle('self-organizer',!!info.organizer);}
+  if(info.member){const selected=current?.accounts?.find(account=>account.id===selectedAccount);const currentName=info.member_accounts?.find(member=>member.self)?.apple_id||selected?.name||selectedAccount||'当前账号';$('familyOrganizerName').textContent=info.member_accounts?.find(member=>member.organizer)?.apple_id||info.organizer_name||info.organizer_account||'组织者账号尚未读取';$('familyCurrentName').textContent=currentName;$('familyCurrentAvatar').textContent=(currentName||'A').slice(0,1).toUpperCase();map.classList.toggle('self-organizer',!!info.organizer);}
   const sharing=[];sharing.push(info.purchase_sharing_known?(info.purchase_sharing_enabled?'购买共享已开启':'购买共享已关闭'):'未请求购买共享');sharing.push(info.location_sharing_known?(info.location_sharing_enabled?'位置共享已开启':'位置共享已关闭'):'未请求位置共享');$('familySafety').textContent=sharing.join(' · ')+'。家庭验证码只在 Apple 挑战出现后由当前账号自己的本地 Mac 身份生成。';
   if(animate){shell.classList.remove('family-updated');requestAnimationFrame(()=>shell.classList.add('family-updated'));window.setTimeout(()=>shell.classList.remove('family-updated'),700);}
 }

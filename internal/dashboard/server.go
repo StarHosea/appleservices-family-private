@@ -510,7 +510,13 @@ func parseFamilyStatus(output string) (*control.FamilyInfo, error) {
 }
 
 func runFamilyStatus(ctx context.Context, helper string, account *Account, joinStorage bool) (*control.FamilyInfo, error) {
-	args := []string{"-dir", account.Dir, "-safe-json"}
+	privateDir, err := os.MkdirTemp(account.Dir, ".family-members-")
+	if err != nil {
+		return nil, errors.New("无法创建家庭成员查询工作区")
+	}
+	defer os.RemoveAll(privateDir)
+	membersPath := filepath.Join(privateDir, "members.json")
+	args := []string{"-dir", account.Dir, "-safe-json", "-members-out", membersPath}
 	if joinStorage {
 		args = append(args, "-join-shared-storage")
 	}
@@ -522,7 +528,15 @@ func runFamilyStatus(ctx context.Context, helper string, account *Account, joinS
 	if err := command.Run(); err != nil {
 		return nil, errors.New("家庭操作未完成，请刷新状态后核对")
 	}
-	return parseFamilyStatus(output.String())
+	family, err := parseFamilyStatus(output.String())
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(membersPath)
+	if err != nil || len(data) > 64<<10 || json.Unmarshal(data, &family.MemberAccounts) != nil || family.MemberAccounts == nil || !validCachedFamily(family) {
+		return nil, errors.New("家庭成员账号回读无效，请重新读取")
+	}
+	return family, nil
 }
 
 type familyCandidate struct {
