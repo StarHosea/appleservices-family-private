@@ -1013,7 +1013,7 @@ func (s *Server) startInMode(ctx context.Context, dir string, creds credentials,
 	return control.Result{OK: true, Message: "正在连接 Apple，请稍等"}
 }
 
-const accountRepairMessage = "Apple 要求先完成账户修复，当前登录尚未完成。请前往 https://account.apple.com/ 或 Apple 官方设备的账户设置，按提示完成处理后再回来连接；切换短信方式无法跳过此步骤。"
+const accountRepairMessage = "Apple 返回了本客户端尚未支持的认证后续步骤（repair），当前登录尚未完成。这不代表账号官网存在待修复事项；即使官网能正常登录，本客户端仍可能需要适配。请选择此账号重新连接以获取诊断状态。"
 
 func lastProcessError(path string) string {
 	data, err := os.ReadFile(path)
@@ -1028,7 +1028,7 @@ func lastProcessError(path string) string {
 		}
 		// Never forward arbitrary stderr (which can contain credentials).
 		switch {
-		case strings.Contains(line, "gsa: Apple account repair required"), strings.Contains(line, `gsa: unsupported authentication continuation "repair"`):
+		case strings.Contains(line, "gsa: authentication continuation requires client support (repair)"), strings.Contains(line, "gsa: Apple account repair required"), strings.Contains(line, `gsa: unsupported authentication continuation "repair"`):
 			return accountRepairMessage
 		case strings.Contains(line, "a provisioned device state is required"):
 			return "所选目录缺少有效设备身份，请选择已有账号，或通过添加账号建立身份"

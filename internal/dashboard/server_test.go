@@ -202,6 +202,7 @@ func TestLastProcessErrorDoesNotExposeLogSecrets(t *testing.T) {
 
 func TestDashboardRestoresAccountRepairStatus(t *testing.T) {
 	for _, test := range []struct{ state, diagnostic string }{
+		{"account_repair_required", "trusted-device: appleservices: login: gsa: authentication continuation requires client support (repair) (account_id_present=true; identity_token_present=true; pet_present=false)"},
 		{"account_repair_required", "trusted-device: appleservices: login: gsa: Apple account repair required"},
 		{"failed", `trusted-device: appleservices: login: gsa: unsupported authentication continuation "repair"`},
 		{"failed", "unrecognized failure with private-account-value"},
@@ -229,6 +230,9 @@ func TestDashboardRestoresAccountRepairStatus(t *testing.T) {
 			}
 			if view.Status.State != "account_repair_required" || view.Message != accountRepairMessage {
 				t.Fatal("repair guidance lost after dashboard restart")
+			}
+			if strings.Contains(view.Message, "account.apple.com") || strings.Contains(view.Message, "先完成账户修复") || strings.Contains(view.Message, "identity_token_present") {
+				t.Fatal("repair guidance inferred a website requirement or exposed protocol diagnostics")
 			}
 			if view.Status.Running || view.Status.Authenticated || view.Status.VerificationRequired || view.Status.FailureStage != "signing_in" {
 				t.Fatal("repair shown as authenticated or as an SMS challenge")

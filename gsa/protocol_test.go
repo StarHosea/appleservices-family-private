@@ -98,7 +98,7 @@ func TestGrandSlamStopsOnUnknownProtocol(t *testing.T) {
 	}
 }
 
-func TestAuthenticationContinuationRequiresOfficialRepair(t *testing.T) {
+func TestAuthenticationContinuationDistinguishesUnsupportedRepair(t *testing.T) {
 	for _, continuation := range []string{"", "secondaryAuth", "trustedDeviceSecondaryAuth", "repair", "future-flow"} {
 		t.Run(continuation, func(t *testing.T) {
 			err := checkAuthenticationContinuation(continuation)
@@ -117,6 +117,21 @@ func TestAuthenticationContinuationRequiresOfficialRepair(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestContinuationDiagnosticDoesNotExposeAuthenticatedValues(t *testing.T) {
+	status := map[string]any{"au": "repair", "url": "https://example.test/private-status-url", "em": "private-server-message"}
+	payload := map[string]any{"adsid": "private-account-id", "GsIdmsToken": "private-identity-token", "repairURL": "https://example.test/private-payload-url",
+		"t": map[string]any{"com.apple.gs.idms.pet": map[string]any{"token": "private-pet"}}}
+	got := continuationDiagnostic(status, payload)
+	for _, secret := range []string{"private-", "https://", "example.test"} {
+		if strings.Contains(got, secret) {
+			t.Fatal("authenticated value leaked in continuation diagnostic")
+		}
+	}
+	if strings.Count(got, "=true") != 5 || strings.Count(continuationDiagnostic(nil, nil), "=false") != 5 {
+		t.Fatal("diagnostic does not distinguish missing continuation prerequisites")
 	}
 }
 

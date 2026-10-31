@@ -5,9 +5,10 @@ import (
 	"fmt"
 )
 
-// ErrAccountRepairRequired means Apple requires an account flow that must be
-// completed in an official client. It is not an SMS challenge or a login success.
-var ErrAccountRepairRequired = errors.New("gsa: Apple account repair required")
+// ErrAccountRepairRequired identifies Apple's au=repair continuation, which this
+// client does not implement. It does not establish that the account website has
+// anything to repair, or that this response is an SMS challenge or login success.
+var ErrAccountRepairRequired = errors.New("gsa: authentication continuation requires client support (repair)")
 
 func checkAuthenticationContinuation(continuation string) error {
 	switch continuation {
@@ -18,6 +19,25 @@ func checkAuthenticationContinuation(continuation string) error {
 	default:
 		return fmt.Errorf("gsa: unsupported authentication continuation %q", continuation)
 	}
+}
+
+// continuationDiagnostic reports only the presence of expected protocol fields.
+// Never include account identifiers, token values, server messages or URLs.
+func continuationDiagnostic(status, payload map[string]any) string {
+	accountID, _ := payload["adsid"].(string)
+	identityToken, _ := payload["GsIdmsToken"].(string)
+	return fmt.Sprintf("account_id_present=%t; identity_token_present=%t; pet_present=%t; status_url_present=%t; payload_url_present=%t",
+		accountID != "", identityToken != "", payloadToken(payload, "com.apple.gs.idms.pet") != "",
+		continuationURLPresent(status), continuationURLPresent(payload))
+}
+
+func continuationURLPresent(fields map[string]any) bool {
+	for _, key := range []string{"url", "repairUrl", "repairURL"} {
+		if value, _ := fields[key].(string); value != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // AuthenticationError distinguishes transport rejection from a GSA error.
