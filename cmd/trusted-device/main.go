@@ -929,6 +929,9 @@ func run() (runErr error) {
 			return control.Result{OK: true, Purchase: purchase, Message: "美区 50GB 订阅和付费配额均已核验", Stage: "purchase-completed"}
 		}
 		if action == "family-info" || action == "family-add-self" || action == "family-join-storage" {
+			if action == "family-add-self" && password == "" {
+				return control.Result{Message: "加入家庭需要重新认证，请输入当前账号密码重新连接后再加入", Stage: "family-password-required"}
+			}
 			executable, execErr := os.Executable()
 			if execErr != nil {
 				return control.Result{Message: "家庭工具不可用", Stage: "family-worker"}

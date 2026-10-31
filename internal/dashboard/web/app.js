@@ -172,6 +172,11 @@ async function action(name,extra={},options={}){
 		openLogin('reconnect');
 		return;
 	  }
+	  if(name==='family-add-self'&&result.stage==='family-password-required'){
+		notice(result.message||'请输入当前账号密码重新连接后再加入家庭',true);
+		openLogin('reconnect');
+		return;
+	  }
 	  if(name==='hme-reachable-start'&&result.stage==='reconnect-required'){
 		notice(result.message||'请重新连接当前子号',true);
 		openLogin('reconnect');
