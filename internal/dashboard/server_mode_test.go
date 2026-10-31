@@ -32,7 +32,7 @@ func TestServerAuthenticationProtectsPageAndAPI(t *testing.T) {
 		name, path, auth, origin, host string
 		want                           int
 	}{
-		{"page-protected", "/", "", "", "", 401},
+		{"page-protected", "/", "", "", "", 303},
 		{"api-protected", "/api/view", "", "", "", 401},
 		{"bad-token", "/api/view", "Bearer wrong", "", "", 401},
 		{"bearer-api", "/api/view", "Bearer " + secret, "", "", 200},

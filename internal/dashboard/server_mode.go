@@ -54,6 +54,9 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) bool {
 	if s.config.AdminToken == "" || s.bearerAuthorized(r) {
 		return true
 	}
+	if s.webAuthorized(r) {
+		return true
+	}
 	user, password, ok := r.BasicAuth()
 	adminPassword := s.config.AdminPassword
 	if adminPassword == "" {
@@ -62,7 +65,10 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) bool {
 	if ok && user == s.config.AdminUsername && equalSecret(password, adminPassword) {
 		return true
 	}
-	w.Header().Set("WWW-Authenticate", `Basic realm="Apple Services", charset="UTF-8"`)
+	if r.Method == http.MethodGet && r.URL.Path == "/" && r.Header.Get("Authorization") == "" {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return false
+	}
 	http.Error(w, "authentication required", http.StatusUnauthorized)
 	return false
 }

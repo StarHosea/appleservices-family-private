@@ -26,7 +26,7 @@ docker compose up -d --build
 
 `secrets/` 目录仅当前用户可访问；文件只读使非 root 容器用户能读取 Compose 挂载的 secret。目录及文件均已排除 Git 和 Docker 构建上下文。请使用密码管理器保存或读取此文件，不要把内容提交到仓库或写入日志。
 
-打开 `http://127.0.0.1:18741`。HTTP Basic 用户名由 `APPLESERVICES_ADMIN_USERNAME` 设置（默认 `admin`），密码由 `secrets/admin_password` 提供；若未设置密码文件则兼容使用 `secrets/admin_token`。管理员 API 也可使用 `Authorization: Bearer` 携带 `secrets/admin_token` 的内容。密码文件至少 8 个字符，token 至少 32 个字符。
+打开 `http://127.0.0.1:18741`。登录表单的管理员用户名由 `APPLESERVICES_ADMIN_USERNAME` 设置（默认 `admin`），密码由 `secrets/admin_password` 提供；若未设置密码文件则兼容使用 `secrets/admin_token`。管理员 API 也可使用 `Authorization: Bearer` 携带 `secrets/admin_token` 的内容。密码文件至少 8 个字符，token 至少 32 个字符。
 
 “家庭共享”卡片可读取全部当前家庭成员的账号，并标记组织者（母号）及当前账号；组织者不必预先添加到本服务。成员账号只在管理员认证后的页面/API 中显示，并随读取时间保存在账号私有缓存中。工具通过临时私有文件传递这些字段，日志仍只输出数量与角色，不包含成员账号、DSID、联系方式或原始响应。升级后若只有旧的家庭摘要缓存，点击“重新核验 Apple”读取成员账号。
 
@@ -54,7 +54,9 @@ Apple 在密码认证阶段返回 `au=repair` 时，程序不会将它当作短�
 
 Compose 默认仅把端口发布到宿主机回环地址。使用 HTTPS 反向代理时，将 `APPLESERVICES_PUBLIC_URL` 设为浏览器访问的精确来源（例如 `https://apple.example.com`），然后重新启动。代理需保留该来源的 `Host`，并转发 `Authorization`。无需启用跨域 CORS。
 
-非回环监听必须配置管理员凭据和公开来源；未配置时拒绝启动。匿名请求不能读取页面或 API；唯一匿名端点 `/healthz` 只返回进程 HTTP 健康状态。浏览器操作还要求独立 CSRF 凭据。程序不信任任意 `X-Forwarded-Host`。
+非回环监听必须配置管理员凭据和公开来源；未配置时拒绝启动。浏览器通过 `/login` 页面表单输入配置的管理员用户名和密码，不使用浏览器 Basic 认证弹窗；登录失败在表单内提示。登录 Cookie 采用 HttpOnly、SameSite=Strict，HTTPS 下使用 Secure 和 `__Host-` 前缀；会话有效期 12 小时，服务重启需重新登录。控制台提供“退出登录”以撤销当前会话。连续一分钟内失败 10 次会暂时拒绝登录请求。
+
+匿名请求只能访问登录页、其样式及 `/healthz`（只返回进程 HTTP 健康状态），不能读取控制台或账户 API。表单登录和退出要求 Origin 匹配公开来源，登录后的浏览器 API 操作还要求独立 CSRF 凭据。程序不信任任意 `X-Forwarded-Host`。现有客户端仍可主动发送 Basic 凭据，但服务器不再发送 `WWW-Authenticate` 挑战。
 
 已有 API 保持原来的 `/api/*` 路由。外部客户端使用 `Authorization: Bearer <管理员凭据>`，且 `Host` 必须匹配公开来源；凭据不要放入 URL。此管理员可操作全部账号，不能当作多租户隔离服务。
 
@@ -66,8 +68,8 @@ Compose 默认仅把端口发布到宿主机回环地址。使用 HTTPS 反向�
 | `APPLESERVICES_LISTEN` | HTTP 监听地址；容器默认 `0.0.0.0:18741` |
 | `APPLESERVICES_PUBLIC_URL` | 浏览器精确来源，不含路径 |
 | `APPLESERVICES_ADMIN_TOKEN_FILE` | 至少 32 字符的管理员凭据文件 |
-| `APPLESERVICES_ADMIN_USERNAME` | HTTP Basic 管理员用户名，默认 `admin` |
-| `APPLESERVICES_ADMIN_PASSWORD_FILE` | HTTP Basic 管理员密码文件，至少 8 字符 |
+| `APPLESERVICES_ADMIN_USERNAME` | 管理员登录用户名，默认 `admin` |
+| `APPLESERVICES_ADMIN_PASSWORD_FILE` | 管理员登录密码文件，至少 8 字符 |
 | `APPLESERVICES_SYNC_TOKEN` | 可选的只读会话同步密钥，至少 32 字符；留空关闭开放同步接口 |
 | `APPLESERVICES_SYNC_TOKEN_FILE` | 同步密钥文件；也可使用 `-sync-token-file`，优先于环境变量 |
 | `APPLESERVICES_ADI_LIBRARY` | 固定 Linux 模块的路径；镜像已配置 |

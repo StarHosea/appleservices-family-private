@@ -37,14 +37,18 @@ type Config struct {
 	Port                                       int
 }
 type Server struct {
-	config    Config
-	listener  net.Listener
-	http      *http.Server
-	token     string
-	launchMu  sync.Mutex
-	mu        sync.Mutex
-	launching bool
-	message   string
+	config        Config
+	listener      net.Listener
+	http          *http.Server
+	token         string
+	authMu        sync.Mutex
+	webSessions   map[string]time.Time
+	loginWindow   time.Time
+	loginFailures int
+	launchMu      sync.Mutex
+	mu            sync.Mutex
+	launching     bool
+	message       string
 	// accounts holds every registered account. The legacy single-account
 	// fields below address the account whose directory is Config.Dir, so the
 	// original one-account behaviour and its tests keep working unchanged.
@@ -1188,7 +1192,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-AppleServices-UI", "1")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	// Native login/logout forms need a non-opaque Origin; no-referrer makes
+	// Chromium send Origin: null even for a same-origin form submission.
+	w.Header().Set("Referrer-Policy", "same-origin")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 	if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
 		w.Header().Set("Content-Type", "text/plain")
@@ -1202,6 +1208,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/open/v1/sessions" || strings.HasPrefix(r.URL.Path, "/api/open/v1/sessions/") {
 		s.serveSessionSync(w, r)
+		return
+	}
+	if s.serveWebAuth(w, r) {
 		return
 	}
 	if !s.authorize(w, r) {
@@ -1385,6 +1394,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if file == "index.html" {
 		data = bytes.ReplaceAll(data, []byte("__APP_TOKEN__"), []byte(s.token))
+		controls := ""
+		if s.config.AdminToken != "" {
+			controls = `<form action="/logout" method="post"><button class="quiet-button" type="submit">退出登录</button></form>`
+		}
+		data = bytes.ReplaceAll(data, []byte("__AUTH_CONTROLS__"), []byte(controls))
 	}
 	w.Write(data)
 }

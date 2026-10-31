@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>登录 · Apple Services</title>
+  <link rel="stylesheet" href="/login.css">
+</head>
+<body>
+  <main class="login-shell">
+    <section class="brand-panel" aria-label="Apple Services">
+      <a class="brand" href="/login"><span class="brand-icon" aria-hidden="true">a</span>appleservices</a>
+      <div class="brand-copy"><span class="eyebrow">你的 Apple 工作空间</span><h1>设备与账户，<br>一处管理。</h1><p>管理设备身份、账户会话与隐私邮箱，<br>从登录工作空间开始。</p></div>
+      <span class="brand-footer">Apple Services · 设备控制台</span>
+    </section>
+    <section class="form-panel" aria-labelledby="login-title">
+      <div class="form-heading"><span class="eyebrow">欢迎回来</span><h2 id="login-title">登录工作空间</h2><p>使用管理员账号继续</p></div>
+      {{if .Error}}<div class="login-error" role="alert">{{.Error}}</div>{{end}}
+      <form action="/login" method="post">
+        <label for="username">用户名</label>
+        <input id="username" name="username" type="text" value="{{.Username}}" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="输入管理员用户名" maxlength="256" required autofocus>
+        <label for="password">密码</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" placeholder="输入管理员密码" required>
+        <button type="submit">登录<span aria-hidden="true">→</span></button>
+      </form>
+      <p class="form-note">登录后可访问此工作空间中的账户与设备。</p>
+    </section>
+  </main>
+</body>
+</html>
