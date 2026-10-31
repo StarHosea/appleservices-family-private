@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Laky-64/appleservices"
 	"github.com/Laky-64/appleservices/gsa"
@@ -94,6 +95,31 @@ func TestDeviceListFailureExplainsIdentityRefresh(t *testing.T) {
 	}
 	if result := deviceListFailure(errors.New("temporary failure")); result.Stage != "device_query_failed" {
 		t.Fatalf("unrelated failure was misclassified: %#v", result)
+	}
+}
+
+func TestDeviceQueryFailurePersistsSeparatelyFromLoginAndClearsOnSuccess(t *testing.T) {
+	status := runtimeStatus{Authenticated: true, State: "online", DeviceCount: 2, LastDeviceQueryAt: time.Now().UTC()}
+	previousQuery := status.LastDeviceQueryAt
+	result := status.deviceQueryFailed(&gsa.DeviceRequestError{HTTPStatus: 401})
+	dir := t.TempDir()
+	if err := status.save(dir); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "runtime.json"))
+	var saved runtimeStatus
+	if json.Unmarshal(data, &saved) != nil || saved.DeviceQueryStage != result.Stage || saved.DeviceQueryMessage == "" || !saved.Authenticated || saved.State != "online" || saved.DeviceCount != 2 || !saved.LastDeviceQueryAt.Equal(previousQuery) {
+		t.Fatal("device failure discarded the login, previous query or actionable reason")
+	}
+	saved.setDevices(nil, "installation")
+	if saved.DeviceQueryStage != "" || saved.DeviceQueryMessage != "" || saved.DeviceCount != 0 {
+		t.Fatal("successful empty result did not clear the device failure")
+	}
+	login := &fakeMaintainedLogin{account: "same", listErr: &gsa.DeviceRequestError{HTTPStatus: 401}}
+	_, _, err := renewSessionMode(func() (maintainedLogin, error) { return login, nil }, "same", appleservices.DeviceRegistration{}, false)
+	var queryErr deviceQueryError
+	if !errors.As(err, &queryErr) || deviceListFailure(err).Stage != "device_identity_refresh_required" {
+		t.Fatal("renewal lost the device query's actionable error")
 	}
 }
 

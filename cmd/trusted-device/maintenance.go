@@ -17,10 +17,14 @@ import (
 
 var errVerificationRequired = errors.New("account verification is required; complete it in the dashboard")
 
+type deviceQueryError struct{ error }
+
+func (e deviceQueryError) Unwrap() error { return e.error }
+
 func deviceListFailure(err error) control.Result {
 	var requestErr *gsa.DeviceRequestError
 	if errors.Is(err, appleservices.ErrDeviceIdentityRefreshRequired) || errors.As(err, &requestErr) && requestErr.HTTPStatus == 401 {
-		return control.Result{Stage: "device_identity_refresh_required", Message: "设备管理登录态需要补齐：请重新连接此账号一次。成功后会保存该凭据，后续重启不再重复输入密码"}
+		return control.Result{Stage: "device_identity_refresh_required", Message: "设备管理凭据缺失或已被 Apple 拒绝，请重新连接当前账号以更新凭据；这不代表账号没有设备"}
 	}
 	return control.Result{Stage: "device_query_failed", Message: "设备列表获取失败，请稍后重试"}
 }
@@ -96,7 +100,7 @@ func renewSessionMode(begin func() (maintainedLogin, error), accountID string, r
 	}
 	devices, err := login.AccountDevices()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, deviceQueryError{err}
 	}
 	if err := login.SaveSession(); err != nil {
 		return nil, nil, err
@@ -114,6 +118,8 @@ type runtimeStatus struct {
 	UpdatedAt               time.Time `json:"updated_at"`
 	LastRefreshAt           time.Time `json:"last_refresh_at"`
 	LastDeviceQueryAt       time.Time `json:"last_device_query_at"`
+	DeviceQueryStage        string    `json:"device_query_stage,omitempty"`
+	DeviceQueryMessage      string    `json:"device_query_message,omitempty"`
 	DeviceCount             int       `json:"device_count"`
 	InstallationVisible     bool      `json:"installation_visible"`
 	RefreshCount            int       `json:"refresh_count"`
@@ -127,12 +133,19 @@ type runtimeStatus struct {
 }
 
 func (s *runtimeStatus) setDevices(devices []appleservices.AccountDevice, name string) {
+	s.DeviceQueryStage, s.DeviceQueryMessage = "", ""
 	s.DeviceCount = len(devices)
 	s.InstallationVisible = false
 	for _, device := range devices {
 		s.InstallationVisible = s.InstallationVisible || device.Name == name
 	}
 	s.LastDeviceQueryAt = time.Now().UTC()
+}
+
+func (s *runtimeStatus) deviceQueryFailed(err error) control.Result {
+	result := deviceListFailure(err)
+	s.DeviceQueryStage, s.DeviceQueryMessage = result.Stage, result.Message
+	return result
 }
 
 func writeJSONFile(path string, value any) error {

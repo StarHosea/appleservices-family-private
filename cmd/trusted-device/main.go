@@ -435,6 +435,7 @@ func run() (runErr error) {
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Could not verify account device status:", err)
+		status.deviceQueryFailed(err)
 	} else {
 		status.setDevices(devices, *name)
 		if panel != nil {
@@ -543,6 +544,12 @@ func run() (runErr error) {
 		renewed, devices, err := renewSessionMode(beginRenewal, accountID, registration, !*resumeSession)
 		if err != nil {
 			status.State = "refresh_failed"
+			var queryErr deviceQueryError
+			if errors.As(err, &queryErr) {
+				result := status.deviceQueryFailed(err)
+				status.save(*dir)
+				return result
+			}
 			if errors.Is(err, errVerificationRequired) {
 				status.State, status.VerificationRequired = "verification_required", true
 			}
@@ -1226,7 +1233,9 @@ func run() (runErr error) {
 		if action == "devices" {
 			devices, err := active.AccountDevices()
 			if err != nil {
-				return deviceListFailure(err)
+				result := status.deviceQueryFailed(err)
+				status.save(*dir)
+				return result
 			}
 			status.setDevices(devices, *name)
 			if panel != nil {

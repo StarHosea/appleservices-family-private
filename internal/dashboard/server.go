@@ -65,6 +65,8 @@ type Status struct {
 	UpdatedAt            time.Time `json:"updated_at"`
 	LastRefreshAt        time.Time `json:"last_refresh_at"`
 	LastDeviceQueryAt    time.Time `json:"last_device_query_at"`
+	DeviceQueryStage     string    `json:"device_query_stage,omitempty"`
+	DeviceQueryMessage   string    `json:"device_query_message,omitempty"`
 	DeviceCount          int       `json:"device_count"`
 	InstallationVisible  bool      `json:"installation_visible"`
 	RefreshCount         int       `json:"refresh_count"`
@@ -77,6 +79,8 @@ type Status struct {
 type view struct {
 	Status               Status                  `json:"status"`
 	Devices              []control.Device        `json:"devices"`
+	DevicesCheckedAt     time.Time               `json:"devices_checked_at"`
+	DevicesStale         bool                    `json:"devices_stale"`
 	Pending              *control.Pending        `json:"pending"`
 	CodeReady            bool                    `json:"code_ready"`
 	ControlReady         bool                    `json:"control_ready"`
@@ -824,6 +828,12 @@ func (s *Server) snapshotFor(ctx context.Context, id string) view {
 		account, dir = accounts[0], accounts[0].Dir
 	}
 	result := view{Status: s.readStatusFrom(dir), Devices: []control.Device{}}
+	cachedDevices := readDeviceCache(account)
+	if cachedDevices != nil {
+		result.Devices = cachedDevices.Devices
+		result.DevicesCheckedAt = cachedDevices.CheckedAt
+		result.DevicesStale = true
+	}
 	if account == nil {
 		s.mu.Lock()
 		result.Launching, result.Message = s.launching, s.message
@@ -871,7 +881,18 @@ func (s *Server) snapshotFor(ctx context.Context, id string) view {
 	if result.Status.Running {
 		var live control.View
 		if s.callFor(ctx, dir, "/view", nil, &live) == nil && json.Unmarshal(live.Status, &result.Status) == nil {
-			result.Devices = live.Devices
+			// Only a completed query (including a genuine empty result) may
+			// replace the saved list. A newly started worker has no list yet.
+			if !result.Status.LastDeviceQueryAt.IsZero() {
+				result.Devices = live.Devices
+				result.DevicesCheckedAt = result.Status.LastDeviceQueryAt
+				result.DevicesStale = result.Status.DeviceQueryStage != "" || time.Since(result.DevicesCheckedAt) > deviceCacheFreshFor
+				if cachedDevices == nil || !cachedDevices.CheckedAt.Equal(result.DevicesCheckedAt) {
+					_ = writeDeviceCache(account, live.Devices, result.DevicesCheckedAt)
+				}
+			} else if cachedDevices == nil {
+				result.Devices = live.Devices
+			}
 			result.Pending = live.Pending
 			result.CodeReady = live.CodeReady
 			result.HideMyEmailAvailable = slices.Contains(live.Capabilities, "hide-my-email")

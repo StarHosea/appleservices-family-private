@@ -152,6 +152,7 @@ var legacyStateFiles = []string{
 	"stop-request.json", "probe-urls.json", "daemon.out.log", "daemon.err.log",
 	"native-adi", "icloud-modern-webview", "icloud-reset-backups",
 	"family-status.json", "storage-status.json", "storage-plans.json",
+	"device-status.json",
 }
 
 // legacyIdentity recovers the migrated account's Apple ID from the session it
