@@ -155,7 +155,30 @@ if(view.message&&!running)$('sessionDescription').textContent=view.message;
 scheduleAutoRefresh(view,activated);
 if(hmeReady&&!busy&&!autoRefreshScheduled&&!hmeInfo&&!hmeReadAttempts.has(selectedAccount)){const account=selectedAccount;hmeReadAttempts.add(account);window.setTimeout(()=>{if(account!==selectedAccount||busy){hmeReadAttempts.delete(account);return;}action('hme-list',{}, {silent:true});},0);}
 }
-let polling=false;async function poll(){if(polling)return;polling=true;const requested=selectedAccount;try{const view=await api('view');if(requested===selectedAccount)render(view);}catch(error){$('lastUpdated').textContent='面板连接暂时中断';}finally{polling=false;}}
+let polling=false,pollQueued=false;
+async function poll(){
+  if(polling){
+    // Account changes can arrive while the previous account's view is loading.
+    // Run once more after it settles so the selected account is never stranded
+    // behind a discarded response.
+    pollQueued=true;
+    return;
+  }
+  polling=true;
+  const requested=selectedAccount;
+  try{
+    const view=await api('view');
+    if(requested===selectedAccount)render(view);
+  }catch(error){
+    $('lastUpdated').textContent='面板连接暂时中断';
+  }finally{
+    polling=false;
+    if(pollQueued){
+      pollQueued=false;
+      void poll();
+    }
+  }
+}
 function renderPlans(info,{checkedAt='',stale=false}={}){planAccount=selectedAccount;planCheckedAt=checkedAt||'';const list=$('planList'),note=$('planCacheNote');list.replaceChildren();purchaseAction='';purchaseLabel='';$('purchaseButton').textContent='提交 50GB 方案';if(!info?.plans?.length){$('planSummary').textContent=info?'Apple 没有返回可购方案。':'先读取 Apple 实时报价；仅已验证的币种与价格会启用购买按钮。';note.textContent=info?cacheLabel('plan',checkedAt,stale):'尚无本地状态';note.classList.toggle('stale',!!info&&!!stale);return;}note.textContent=cacheLabel('plan',checkedAt,stale);note.classList.toggle('stale',!!stale);let target=null;for(const plan of info.plans){const row=document.createElement('div');row.className='plan-row';const name=document.createElement('strong');name.textContent=(plan.bytes?gib(plan.bytes):'未知容量')+(plan.period?' · '+plan.period:'');const price=document.createElement('span');price.textContent=plan.currency?(plan.currency+' '+(plan.price_minor/100).toFixed(2)+'/月'):'价格待 Apple 返回';row.append(name,price);list.append(row);if(plan.bytes===50*1024*1024*1024&&plan.available)target=plan;}if(!stale&&target?.currency==='CNY'&&target.price_minor===600){purchaseAction='storage-purchase';purchaseLabel='CNY 6.00/月';}else if(!stale&&target?.currency==='USD'&&target.price_minor===99){purchaseAction='storage-skill-purchase-us';purchaseLabel='USD 0.99/月';}if(stale){$('planSummary').textContent='显示上次保存的报价，正在后台重新核验 Apple。';}else if(purchaseAction){$('purchaseButton').textContent='提交 50GB · '+purchaseLabel;$('planSummary').textContent='已核对 50GB · '+purchaseLabel+'。点击购买仍会再次确认。';}else{$('planSummary').textContent='Apple 返回了方案，但没有匹配已验证的 50GB 币种与价格；购买保持禁用。';}}
 async function action(name,extra={},options={}){
   if(busy)return;
