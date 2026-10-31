@@ -115,7 +115,7 @@ printf '%s\n' 'change-this-password' > /home/muhaoxing/apps/applefamily/secrets/
 chmod 444 /home/muhaoxing/apps/applefamily/secrets/admin_token /home/muhaoxing/apps/applefamily/secrets/admin_password
 ```
 
-工作流会把域名反代配置写入服务器已有的 1Panel OpenResty，并将应用绑定到 `http://applefamily.shaungdeng.space`。请先添加 `applefamily.shaungdeng.space` 指向 `140.238.56.209` 的 A 记录；DNS 生效后，在 1Panel 为该域名申请 HTTPS 证书，并把反代配置的 `listen 80` 入口改为 HTTPS 重定向和证书配置。工作流不会覆盖 `account-data` 命名卷，也不会执行 `docker compose down -v`。
+工作流会把域名反代配置写入服务器已有的 1Panel OpenResty，并将应用绑定到 `https://applefamily.shuangdeng.space`。请先添加 `applefamily.shuangdeng.space` 指向 `140.238.56.209` 的 A 记录，并在 1Panel 或 ACME 工具中为该域名申请 HTTPS 证书。工作流不会覆盖 `account-data` 命名卷，也不会执行 `docker compose down -v`。
 
 NAC 所用上游 Python hooks、Apple 验证模块、XNU 汇编均固定版本/摘要。镜像构建时验证 XNU 全部五组上游已知答案；不会使用上游的 donor `data.plist`。Store/SAP 所需的独立校验资产由现有实现按需下载到容器缓存，账号状态与这些代码缓存分开。
 

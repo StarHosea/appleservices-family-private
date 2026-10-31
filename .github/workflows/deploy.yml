@@ -18,7 +18,7 @@ concurrency:
 env:
   IMAGE_NAME: ghcr.io/starhosea/appleservices-family-private
   DEPLOY_DIR: /home/muhaoxing/apps/applefamily
-  DEPLOY_DOMAIN: applefamily.shaungdeng.space
+  DEPLOY_DOMAIN: applefamily.shuangdeng.space
 
 jobs:
   build:
@@ -76,6 +76,7 @@ jobs:
           ssh -i "$HOME/.ssh/deploy_key" "$target" "install -d -m 700 '$DEPLOY_DIR/secrets'"
           scp -i "$HOME/.ssh/deploy_key" compose.yaml "$target:$DEPLOY_DIR/compose.yaml.new"
           scp -i "$HOME/.ssh/deploy_key" deploy/nginx/$DEPLOY_DOMAIN.conf "$target:/tmp/$DEPLOY_DOMAIN.conf.new"
+          scp -i "$HOME/.ssh/deploy_key" deploy/certbot/applefamily-openresty-deploy.sh "$target:/tmp/applefamily-openresty-deploy.sh.new"
       - name: Pull and restart service
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
@@ -91,7 +92,7 @@ jobs:
             test -s "$HOME/apps/applefamily/secrets/admin_password"
             mv "$HOME/apps/applefamily/compose.yaml.new" "$HOME/apps/applefamily/compose.yaml"
             umask 077
-            printf "APPLESERVICES_IMAGE=ghcr.io/starhosea/appleservices-family-private\\nAPPLESERVICES_TAG=latest\\nAPPLESERVICES_PUBLIC_URL=http://applefamily.shaungdeng.space\\nAPPLESERVICES_ADMIN_USERNAME=mhx\\n" > "$HOME/apps/applefamily/.env.new"
+            printf "APPLESERVICES_IMAGE=ghcr.io/starhosea/appleservices-family-private\\nAPPLESERVICES_TAG=latest\\nAPPLESERVICES_PUBLIC_URL=https://applefamily.shuangdeng.space\\nAPPLESERVICES_ADMIN_USERNAME=mhx\\n" > "$HOME/apps/applefamily/.env.new"
             mv "$HOME/apps/applefamily/.env.new" "$HOME/apps/applefamily/.env"
             cd "$HOME/apps/applefamily"
             docker compose pull appleservices
@@ -114,7 +115,14 @@ jobs:
           set -eu
           target="$DEPLOY_USER@$DEPLOY_HOST"
           ssh -i "$HOME/.ssh/deploy_key" "$target" "set -eu
+            sudo test -s /etc/letsencrypt/live/$DEPLOY_DOMAIN/fullchain.pem
+            sudo test -s /etc/letsencrypt/live/$DEPLOY_DOMAIN/privkey.pem
+            sudo install -d -m 755 /etc/letsencrypt/renewal-hooks/deploy
+            sudo install -o root -g root -m 0755 /tmp/applefamily-openresty-deploy.sh.new /etc/letsencrypt/renewal-hooks/deploy/applefamily-openresty-deploy.sh
             sudo install -o root -g root -m 0644 /tmp/$DEPLOY_DOMAIN.conf.new /opt/1panel/www/conf.d/$DEPLOY_DOMAIN.conf
+            if test -f /opt/1panel/www/conf.d/applefamily.shaungdeng.space.conf; then
+              sudo mv /opt/1panel/www/conf.d/applefamily.shaungdeng.space.conf /opt/1panel/www/conf.d/applefamily.shaungdeng.space.conf.disabled
+            fi
             sudo docker exec 1Panel-openresty-NhRG openresty -t
             sudo docker exec 1Panel-openresty-NhRG openresty -s reload
-            rm -f /tmp/$DEPLOY_DOMAIN.conf.new"
+            rm -f /tmp/$DEPLOY_DOMAIN.conf.new /tmp/applefamily-openresty-deploy.sh.new"
