@@ -58,7 +58,7 @@ main{position:relative;z-index:1}.sidebar{isolation:isolate}
 body.ui-ready .page-header{animation:enterUp .55s cubic-bezier(.2,.75,.25,1) .02s forwards}
 body.ui-ready .top-grid>*:nth-child(1){animation:enterUp .62s cubic-bezier(.2,.75,.25,1) .08s forwards}
 body.ui-ready .top-grid>*:nth-child(2){animation:enterUp .62s cubic-bezier(.2,.75,.25,1) .15s forwards}
-body.ui-ready main>.request-card.overview-only:nth-of-type(2),body.ui-ready .devices-section{animation:enterUp .58s cubic-bezier(.2,.75,.25,1) .2s forwards}
+body.ui-ready main>.request-card.overview-only,body.ui-ready .devices-section{animation:enterUp .58s cubic-bezier(.2,.75,.25,1) .2s forwards}
 body.ui-ready main>.request-card.overview-only:nth-of-type(3){animation:enterUp .58s cubic-bezier(.2,.75,.25,1) .25s forwards}
 body.ui-ready main>.request-card.overview-only:nth-of-type(4){animation:enterUp .58s cubic-bezier(.2,.75,.25,1) .3s forwards}
 body.ui-ready .lower-grid{animation:enterUp .58s cubic-bezier(.2,.75,.25,1) .34s forwards}
