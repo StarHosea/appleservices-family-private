@@ -190,3 +190,37 @@ func TestNewIdentityIsNeverACopy(t *testing.T) {
 		t.Fatal("two generated identities collided")
 	}
 }
+
+func TestAddAccountResponseBindsFormToRegisteredAccount(t *testing.T) {
+	root := t.TempDir()
+	worker, _ := os.Executable()
+	server, err := New(Config{Dir: root, Worker: worker, Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.listener.Close()
+	server.provisionMacPush = func(context.Context, string) error { return errors.New("test: no network") }
+	var firstID string
+	for attempt := 0; attempt < 2; attempt++ {
+		request := httptest.NewRequest("POST", server.URL()+"/api/accounts/add", strings.NewReader(`{"apple_id":"form@example.test","password":"test-password","twofactor":"trusted-device"}`))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("X-App-Token", server.token)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		var result struct {
+			Account string `json:"account"`
+		}
+		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &result) != nil || result.Account == "" {
+			t.Fatal("form did not receive the registered account binding")
+		}
+		if attempt == 0 {
+			firstID = result.Account
+		}
+		if result.Account != firstID || len(server.accounts) != 1 || server.accounts[0].ID != result.Account {
+			t.Fatal("duplicate submission changed the account binding")
+		}
+		if strings.Contains(response.Body.String(), "test-password") || strings.Contains(response.Body.String(), root) {
+			t.Fatal("login response exposed credentials or local paths")
+		}
+	}
+}

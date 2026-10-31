@@ -4,6 +4,7 @@ let loginMode='reconnect',loginAccount='',current=null,busy=false,privateCode=''
 const autoRefreshState=new Map();
 const hmeReadAttempts=new Set();
 const activationAttempts=new Set();
+let loginFormReady=false,loginSubmitting=false,loginStartedAccount='',loginReturnRoute='#overview',loginResumePending=false,loginVerificationState='',loginActivationStarted=false;
 const autoRefreshOwner=(globalThis.crypto?.randomUUID?.()||Math.random().toString(36).slice(2));
 function autoRefreshLeaseKey(account){return 'appleservices:auto-refresh:'+account;}
 function autoRefreshAttemptKey(key){return 'appleservices:auto-attempt:'+key;}
@@ -87,19 +88,54 @@ function renderHMEForwarding(info){const panel=$('hmeForwardSettings'),select=$(
 function renderHME(info){hmeInfo=info||null;hmeAccount=selectedAccount;renderHMEForwarding(info);const list=$('hmeList');list.replaceChildren();$('hmeActiveCount').textContent=info?.active_count??'—';$('hmeInactiveCount').textContent=info?.inactive_count??'—';if(!info){$('hmeSummary').textContent='读取后可按标签、备注或邮箱搜索。';const empty=document.createElement('div');empty.className='hme-empty';empty.textContent='尚未读取当前子号的地址';list.append(empty);$('hmeMoreButton').hidden=true;return;}const query=$('hmeSearch').value.trim().toLowerCase();const aliases=(info.aliases||[]).filter(item=>(hmeFilter==='all'||(hmeFilter==='active')===!!item.active)&&(!query||[item.email,item.label,item.note,item.origin].some(value=>(value||'').toLowerCase().includes(query))));$('hmeSummary').textContent='共 '+(info.aliases?.length||0)+' 个地址 · '+(aliases.length===info.aliases?.length?'显示全部':'当前筛选 '+aliases.length+' 个');if(!aliases.length){const empty=document.createElement('div');empty.className='hme-empty';empty.textContent=query?'没有匹配的地址':'当前分类没有地址';list.append(empty);}for(const item of aliases.slice(0,hmeVisible)){const row=document.createElement('article');row.className='hme-row'+(item.active?'':' inactive');const identity=document.createElement('div');identity.className='hme-identity';const email=document.createElement('strong');email.textContent=item.email;const meta=document.createElement('small');meta.textContent=(item.label||'无标签')+' · '+hmeDate(item.create_timestamp);identity.append(email,meta);if(item.note){const note=document.createElement('p');note.textContent=item.note;identity.append(note);}const forward=document.createElement('div');forward.className='hme-forward';const state=document.createElement('span');state.className='hme-state '+(item.active?'active':'inactive');state.textContent=item.active?'转发中':'已停用';const destination=document.createElement('small');destination.textContent=item.forward_to_email?'转发至 '+item.forward_to_email:(item.origin||'iCloud+');forward.append(state,destination);const actions=document.createElement('div');actions.className='hme-actions';const copy=document.createElement('button');copy.className='icon-button';copy.title='复制邮箱';copy.setAttribute('aria-label','复制 '+item.email);copy.textContent='⧉';copy.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(item.email);notice('邮箱地址已复制');}catch{notice('复制失败',true);}});const edit=document.createElement('button');edit.className='text-button';edit.textContent='编辑';edit.addEventListener('click',()=>{hmeEditing=item.email;$('hmeEditAddress').textContent=item.email;$('hmeEditLabel').value=item.label||'';$('hmeEditNote').value=item.note||'';$('hmeEditDialog').showModal();$('hmeEditLabel').focus();});actions.append(copy,edit);if(item.active){const deactivate=document.createElement('button');deactivate.className='text-button danger-text';deactivate.textContent='停用';deactivate.addEventListener('click',()=>{if(confirm('停用 '+item.email+'？停用后将停止转发邮件，但可以恢复。'))action('hme-deactivate',{code:item.email});});actions.append(deactivate);}else{const reactivate=document.createElement('button');reactivate.className='text-button';reactivate.textContent='恢复';reactivate.addEventListener('click',()=>action('hme-reactivate',{code:item.email}));const remove=document.createElement('button');remove.className='text-button danger-text';remove.textContent='永久删除';remove.addEventListener('click',()=>{if(confirm('永久删除 '+item.email+'？删除后无法恢复，也不能再使用这个地址。'))action('hme-delete',{code:item.email});});actions.append(reactivate,remove);}row.append(identity,forward,actions);list.append(row);}$('hmeMoreButton').hidden=aliases.length<=hmeVisible;}
 function renderOrganizerOptions(accounts,selected){const select=$('familyOrganizer'),previous=select.value;select.replaceChildren();const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='选择母号';select.append(placeholder);for(const account of accounts){if(account.id===selected||!account.icloud_activated)continue;const option=document.createElement('option');option.value=account.id;option.textContent=(account.id===poolOrganizerAccount?'★ 家庭母号 · ':'')+(account.name||account.id)+' · '+account.id;select.append(option);}if([...select.options].some(option=>option.value===previous))select.value=previous;else if([...select.options].some(option=>option.value===poolOrganizerAccount))select.value=poolOrganizerAccount;}
 function renderFamilyMemberOptions(accounts,organizerID){const select=$('familyRemoveMember'),previous=select.value;select.replaceChildren();const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='选择家庭成员';select.append(placeholder);for(const account of accounts){if(account.id===organizerID||!account.family_member||account.family_organizer||account.family_stale||account.family_organizer_account!==organizerID)continue;const option=document.createElement('option');option.value=account.id;option.textContent=(account.name||account.id)+' · '+account.id;select.append(option);}if([...select.options].some(option=>option.value===previous))select.value=previous;}
-function renderAccounts(view){const list=$('accountList');if(!list)return;const accounts=view.accounts||[];const cachedOrganizers=accounts.filter(account=>account.family_organizer);if(cachedOrganizers.length===1){poolOrganizerAccount=cachedOrganizers[0].id;poolOrganizerName=cachedOrganizers[0].name||cachedOrganizers[0].id;localStorage.setItem('family-organizer-account',poolOrganizerAccount);localStorage.setItem('family-organizer-name',poolOrganizerName);}renderOrganizerOptions(accounts,view.selected);renderFamilyMemberOptions(accounts,view.selected);list.replaceChildren();for(const account of accounts){const organizer=account.family_organizer||account.id===poolOrganizerAccount;const item=document.createElement('button');item.type='button';item.className='account-item'+(account.id===view.selected?' active':'')+(organizer?' family-organizer':'')+(organizer&&account.family_stale?' stale-family':'');const avatar=document.createElement('span');avatar.className='account-avatar';avatar.textContent=organizer?'★':(account.name||'?').slice(0,1).toUpperCase();const copy=document.createElement('span');copy.className='account-item-copy';const strong=document.createElement('strong');strong.textContent=account.name||account.id;if(organizer){const role=document.createElement('span');role.className='account-role';role.textContent=account.family_stale?'母号待核验':'母号';strong.append(role);}const small=document.createElement('small');const state=account.running?(account.authenticated?'在线':'连接中'):account.icloud_activated?'iCloud 已激活':'已停止';small.textContent=organizer?'家庭组织者 · '+state:account.running&&account.authenticated?'在线工作区':state;copy.append(strong,small);const dot=document.createElement('i');dot.className=account.running&&account.authenticated?'on':account.running?'waiting':account.icloud_activated?'activated':'';item.append(avatar,copy,dot);item.addEventListener('click',()=>{selectedAccount=account.id;localStorage.setItem('selected-account',account.id);familyInfo=null;familyAccount='';familyCheckedAt='';familyStale=false;storageAccount='';storageCheckedAt='';planAccount='';planCheckedAt='';purchaseAction='';purchaseLabel='';activationInfo=null;activationAccount='';$('purchaseButton').textContent='提交 50GB 方案';renderFamily(null);renderStorage(null);renderPlans(null);resetHME();clearCode();poll();});list.append(item);}}
-function openLogin(mode){
-  if(mode==='reconnect'&&!selectedAccount&&!(current?.accounts||[]).length)mode='add';
-  loginMode=mode;loginAccount=selectedAccount;
+function renderAccounts(view){const list=$('accountList');if(!list)return;const accounts=view.accounts||[];const cachedOrganizers=accounts.filter(account=>account.family_organizer);if(cachedOrganizers.length===1){poolOrganizerAccount=cachedOrganizers[0].id;poolOrganizerName=cachedOrganizers[0].name||cachedOrganizers[0].id;localStorage.setItem('family-organizer-account',poolOrganizerAccount);localStorage.setItem('family-organizer-name',poolOrganizerName);}renderOrganizerOptions(accounts,view.selected);renderFamilyMemberOptions(accounts,view.selected);list.replaceChildren();for(const account of accounts){const organizer=account.family_organizer||account.id===poolOrganizerAccount;const item=document.createElement('button');item.type='button';item.className='account-item'+(account.id===view.selected?' active':'')+(organizer?' family-organizer':'')+(organizer&&account.family_stale?' stale-family':'');const avatar=document.createElement('span');avatar.className='account-avatar';avatar.textContent=organizer?'★':(account.name||'?').slice(0,1).toUpperCase();const copy=document.createElement('span');copy.className='account-item-copy';const strong=document.createElement('strong');strong.textContent=account.name||account.id;if(organizer){const role=document.createElement('span');role.className='account-role';role.textContent=account.family_stale?'母号待核验':'母号';strong.append(role);}const small=document.createElement('small');const state=account.running?(account.authenticated?'在线':'连接中'):account.icloud_activated?'iCloud 已激活':'已停止';small.textContent=organizer?'家庭组织者 · '+state:account.running&&account.authenticated?'在线工作区':state;copy.append(strong,small);const dot=document.createElement('i');dot.className=account.running&&account.authenticated?'on':account.running?'waiting':account.icloud_activated?'activated':'';item.append(avatar,copy,dot);item.addEventListener('click',()=>{if(loginSubmitting)return;if(isLoginPage())location.hash='overview';selectedAccount=account.id;localStorage.setItem('selected-account',account.id);familyInfo=null;familyAccount='';familyCheckedAt='';familyStale=false;storageAccount='';storageCheckedAt='';planAccount='';planCheckedAt='';purchaseAction='';purchaseLabel='';activationInfo=null;activationAccount='';$('purchaseButton').textContent='提交 50GB 方案';renderFamily(null);renderStorage(null);renderPlans(null);resetHME();clearCode();poll();});list.append(item);}}
+function isLoginPage(){return ['#login','#login-add'].includes(location.hash);}
+function verificationHelp(){const descriptions={'trusted-device':'在已登录此账户的 Apple 设备上获取验证码。',sms:'Apple 将向账户绑定的手机号发送一条新短信。','sms-existing':'使用已经收到、仍然有效的短信验证码，不会重新发送。',circle:'使用已登录此账户的受信任设备完成配对。'};$('verificationHelp').textContent=descriptions[$('twofactor').value]||'';}
+function prepareLogin(mode,resumePending=false){
+  loginMode=mode;loginAccount=selectedAccount;loginStartedAccount='';loginFormReady=true;loginResumePending=resumePending;loginVerificationState='';loginActivationStarted=false;
   $('appleID').value=mode==='reconnect'?(current?.login_account||''):'';
   $('appleID').readOnly=mode==='reconnect'&&!!$('appleID').value;
-  $('password').value='';$('twofactor').value='trusted-device';
-  $('loginDialog').querySelector('h2').textContent=mode==='add'?'添加 Apple 账户':'重新连接当前账号';
-  $('loginDialog').showModal();
+  $('password').value='';$('twofactor').value='trusted-device';$('loginError').hidden=true;
+  $('loginTitle').textContent=mode==='add'?'添加 Apple 账户':'重新连接当前账号';
+  $('loginDescription').textContent=mode==='add'?'添加一个账户，并完成 Apple 身份验证。':'使用当前账号的密码重新建立连接。';
+  $('loginForm').setAttribute('action',mode==='add'?'/api/accounts/add':'/api/start');
+  verificationHelp();
+}
+function openLogin(mode){
+  if(busy)return;
+  if(mode==='reconnect'&&!selectedAccount&&!(current?.accounts||[]).length)mode='add';
+  if(!isLoginPage())loginReturnRoute=['#devices','#requests'].includes(location.hash)?location.hash:'#overview';
+  prepareLogin(mode);
+  location.hash=mode==='add'?'login-add':'login';applyRoute();
   ($('appleID').readOnly?$('password'):$('appleID')).focus();
 }
+function renderLogin(view){
+  if(!isLoginPage())return;
+  if(view?.selected&&view.selected!==selectedAccount)view=null;
+  if(view&&!selectedAccount&&!(view.accounts||[]).length&&loginMode==='reconnect'&&!loginSubmitting){prepareLogin('add');history.replaceState(null,'','#login-add');}
+  if(loginMode==='reconnect'&&!loginAccount)loginAccount=selectedAccount;
+  if(loginMode==='reconnect'&&!$('appleID').value&&view?.login_account){$('appleID').value=view.login_account;$('appleID').readOnly=true;}
+  const status=view?.status||{},waiting=['awaiting_sms','awaiting_existing_sms','awaiting_device_code','awaiting_account_validation','awaiting_pairing','awaiting_pairing_code','verifying_pairing'].includes(status.state);
+  if(loginResumePending&&view){if(loginMode==='reconnect'&&waiting)loginStartedAccount=selectedAccount;loginResumePending=false;}
+  let active=!!loginStartedAccount&&loginStartedAccount===selectedAccount;
+  if(active&&view?.activation_ready)loginActivationStarted=true;
+  const serviceCompleted=loginActivationStarted&&view?.icloud_activated;
+  if(active&&!status.running&&!view?.launching&&view?.message&&!view?.activation_ready&&!serviceCompleted){$('loginError').textContent=view.message;$('loginError').hidden=false;loginStartedAccount='';active=false;}
+  const completed=active&&(status.authenticated||serviceCompleted);
+  $('loginFields').hidden=active;$('loginFields').disabled=busy;$('loginVerification').hidden=!active;if(completed)$('loginError').hidden=true;
+  $('loginForm').setAttribute('aria-busy',String(loginSubmitting));
+  $('loginSubmitButton').textContent=loginSubmitting?'正在提交…':'登录并继续 →';
+  $('loginProgress').hidden=!active;
+  $('loginProgressLabel').textContent=completed?'账户已登录':waiting?'完成身份验证':'正在连接 Apple…';
+  $('loginProgressDescription').textContent=completed?'账户连接成功，后台将自动保持登录。':waiting?'在下方提交本次登录的验证码，或按提示完成设备配对。':'正在验证账户并建立连接，请稍候。';
+  $('loginWorkspaceLink').hidden=!completed;$('loginRetryButton').hidden=!active||completed||busy;
+  for(const [id,step] of [['loginStepCredentials',1],['loginStepVerification',2],['loginStepComplete',3]]){const currentStep=completed?3:active?2:1;$(id).classList.toggle('active',step===currentStep);$(id).classList.toggle('complete',step<currentStep);if(step===currentStep)$(id).setAttribute('aria-current','step');else $(id).removeAttribute('aria-current');}
+  const verificationState=selectedAccount+'|'+status.state;
+  if(active&&waiting&&loginVerificationState!==verificationState){loginVerificationState=verificationState;requestAnimationFrame(()=>{if(!isLoginPage())return;if(!$('smsPanel').hidden)$('smsCode').focus();else if(!$('pairingPanel').hidden&&!$('pairingCode').disabled)$('pairingCode').focus();});}
+  for(const id of ['addAccountButton','addAccountButtonSecondary'])$(id).disabled=busy;
+}
 function scheduleAutoRefresh(view,activated){
-  if(busy||autoRefreshScheduled)return;
+  if(busy||autoRefreshScheduled||(isLoginPage()&&!loginStartedAccount))return;
   if(!activated){
     const key=selectedAccount+'|activation|'+(view.status?.last_refresh_at||view.status?.state||'saved');
     if(view.activation_ready&&!view.launching&&(!view.status?.running||view.status?.authenticated)&&!activationAttempts.has(key)&&!autoRefreshAttempted(key)&&acquireAutoRefreshLease(selectedAccount)){
@@ -143,7 +179,7 @@ if(familyAccount&&familyAccount!==selectedAccount)renderFamily(null);const selec
 const hmeEligible=!!selectedFamily?.member&&!selectedFamily?.organizer&&selectedFamily?.storage_known&&selectedFamily?.storage_participating&&selectedFamily?.storage_available&&selectedFamily?.storage_enabled;$('hmeCard').hidden=!hmeEligible;const hmeReady=hmeEligible&&!familyStale&&online&&view.control_ready&&view.hide_my_email_available;$('hmeListButton').disabled=busy||!hmeReady;$('hmeGenerateButton').disabled=busy||!hmeReady||!!hmeInfo?.generation_limited;$('hmeGenerateButton').textContent=hmeInfo?.generation_limited?'已达 Apple 上限':'＋ 生成候选';$('hmeGenerateButton').title=hmeInfo?.generation_limited?'Apple 已确认当前账号达到地址数量上限；地址减少后点击“读取地址”重新核验。':'';$('hmeReserveButton').disabled=busy||!hmeReady||!hmeCandidate||!$('hmeCreateLabel').value.trim();if(hmeEligible&&!view.hide_my_email_available&&!hmeInfo)$('hmeSummary').textContent=online?'当前后台版本不支持隐私邮箱，请重新连接此账号完成升级。':'重新连接此账号后可读取隐私邮箱。';if(hmeAccount&&hmeAccount!==selectedAccount)resetHME();
 const forwardChoice=$('hmeForwardSelect').value,forwardCurrent=hmeInfo?.selected_forward_to||'';$('hmeForwardButton').disabled=busy||!hmeReady||!forwardChoice||forwardChoice.toLowerCase()===forwardCurrent.toLowerCase();
 $('hmeReachableEmail').disabled=busy||!hmeReady||!$('hmeReachableCodeForm').hidden;$('hmeReachableStartButton').disabled=busy||!hmeReady||!$('hmeReachableEmail').value.trim()||!$('hmeReachableCodeForm').hidden;$('hmeReachableCode').disabled=busy;$('hmeReachableCodeForm').querySelector('button').disabled=busy;
-$('smsPanel').hidden=!['awaiting_sms','awaiting_existing_sms','awaiting_device_code','awaiting_account_validation'].includes(status.state);const smsCode=['awaiting_sms','awaiting_existing_sms'].includes(status.state),deviceCode=!smsCode;$('smsPanel').querySelector('h3').textContent=deviceCode?'输入受信任设备上的验证码':'输入短信验证码';$('smsPanel').querySelector('p').textContent=deviceCode?'请在已登录该账号的 Apple 设备上获取六位验证码。':status.state==='awaiting_existing_sms'?'提交已经收到的短信码；本次不会再次发送短信。':'验证码已发送到账户绑定的手机号。';$('resendButton').hidden=status.state!=='awaiting_sms';$('resendButton').disabled=busy;$('smsForm').querySelector('button[type="submit"]').disabled=busy;
+$('smsPanel').hidden=!['awaiting_sms','awaiting_existing_sms','awaiting_device_code','awaiting_account_validation'].includes(status.state);const smsCode=['awaiting_sms','awaiting_existing_sms'].includes(status.state),deviceCode=!smsCode;$('smsPanel').querySelector('h3').textContent=deviceCode?'输入受信任设备上的验证码':'输入短信验证码';$('smsPanel').querySelector('p').textContent=deviceCode?'请在已登录该账号的 Apple 设备上获取六位验证码。':status.state==='awaiting_existing_sms'?'提交已经收到的短信码；本次不会再次发送短信。':'验证码已发送到账户绑定的手机号。';$('smsCode').placeholder=smsCode?'六位短信验证码':'六位设备验证码';$('smsCode').setAttribute('aria-label',$('smsCode').placeholder);$('resendButton').hidden=status.state!=='awaiting_sms';$('resendButton').disabled=busy;$('smsForm').querySelector('button[type="submit"]').disabled=busy;
 $('pairingPanel').hidden=!['awaiting_pairing_code','verifying_pairing'].includes(status.state);$('pairingCode').disabled=busy||status.state==='verifying_pairing';$('pairingForm').querySelector('button').disabled=busy||status.state==='verifying_pairing';
 renderDevices(view.devices,status,view);const pending=view.pending;$('requestDot').hidden=!pending;$('requestTag').textContent=pending?'待处理':'等待请求';$('requestTag').classList.toggle('pending',!!pending);$('requestTitle').textContent=pending?(pending.kind==='circle'?'官方客户端配对验证':'收到新的 Apple 登录请求'):'没有待处理的登录请求';$('requestText').textContent=pending?(pending.kind==='circle'?'允许后会显示配对码，请输入到发起验证的官方客户端。':'请确认这是你正在进行的登录。'):'收到新的请求时，它会出现在这里。';$('requestActions').hidden=!pending;$('allowButton').disabled=busy;$('denyButton').disabled=busy;
 $('lastUpdated').textContent=running?'后台运行中 · '+time(status.updated_at):'后台未运行';if(!privateCode)$('codeDetail').textContent=view.code_ready?'点击按钮显示六位验证码':'登录后可生成六位验证码';
@@ -152,7 +188,7 @@ if(status.last_device_query_at&&!status.last_device_query_at.startsWith('0001')&
 if(status.refresh_count&&lastRefresh!==status.last_refresh_at){activity('登录续期成功',status.last_refresh_at);lastRefresh=status.last_refresh_at;}
 if(pending&&lastRequest!==pending.id){activity('收到新的登录请求',pending.received_at);lastRequest=pending.id;}
 if(view.message&&!running)$('sessionDescription').textContent=view.message;
-scheduleAutoRefresh(view,activated);
+renderLogin(view);scheduleAutoRefresh(view,activated);
 if(hmeReady&&!busy&&!autoRefreshScheduled&&!hmeInfo&&!hmeReadAttempts.has(selectedAccount)){const account=selectedAccount;hmeReadAttempts.add(account);window.setTimeout(()=>{if(account!==selectedAccount||busy){hmeReadAttempts.delete(account);return;}action('hme-list',{}, {silent:true});},0);}
 }
 let polling=false,pollQueued=false;
@@ -182,7 +218,8 @@ async function poll(){
 function renderPlans(info,{checkedAt='',stale=false}={}){planAccount=selectedAccount;planCheckedAt=checkedAt||'';const list=$('planList'),note=$('planCacheNote');list.replaceChildren();purchaseAction='';purchaseLabel='';$('purchaseButton').textContent='提交 50GB 方案';if(!info?.plans?.length){$('planSummary').textContent=info?'Apple 没有返回可购方案。':'先读取 Apple 实时报价；仅已验证的币种与价格会启用购买按钮。';note.textContent=info?cacheLabel('plan',checkedAt,stale):'尚无本地状态';note.classList.toggle('stale',!!info&&!!stale);return;}note.textContent=cacheLabel('plan',checkedAt,stale);note.classList.toggle('stale',!!stale);let target=null;for(const plan of info.plans){const row=document.createElement('div');row.className='plan-row';const name=document.createElement('strong');name.textContent=(plan.bytes?gib(plan.bytes):'未知容量')+(plan.period?' · '+plan.period:'');const price=document.createElement('span');price.textContent=plan.currency?(plan.currency+' '+(plan.price_minor/100).toFixed(2)+'/月'):'价格待 Apple 返回';row.append(name,price);list.append(row);if(plan.bytes===50*1024*1024*1024&&plan.available)target=plan;}if(!stale&&target?.currency==='CNY'&&target.price_minor===600){purchaseAction='storage-purchase';purchaseLabel='CNY 6.00/月';}else if(!stale&&target?.currency==='USD'&&target.price_minor===99){purchaseAction='storage-skill-purchase-us';purchaseLabel='USD 0.99/月';}if(stale){$('planSummary').textContent='显示上次保存的报价，正在后台重新核验 Apple。';}else if(purchaseAction){$('purchaseButton').textContent='提交 50GB · '+purchaseLabel;$('planSummary').textContent='已核对 50GB · '+purchaseLabel+'。点击购买仍会再次确认。';}else{$('planSummary').textContent='Apple 返回了方案，但没有匹配已验证的 50GB 币种与价格；购买保持禁用。';}}
 async function action(name,extra={},options={}){
   if(busy)return;
-  const requestedAccount=selectedAccount;
+  const requestedAccount=selectedAccount,loginVerificationAction=isLoginPage()&&['submit-sms','submit-account-code','submit-pairing','resend-sms','activation-connect'].includes(name);
+  if(loginVerificationAction)$('loginError').hidden=true;
   if(name.startsWith('hme-')&&familyStale){
     try{
       busy=true;document.body.classList.add('busy');if(current)render(current);
@@ -263,7 +300,7 @@ async function action(name,extra={},options={}){
     if(options.autoKey)autoRefreshState.delete(options.autoKey);
     if(result.code)showCode(result);else if(!options.silent)notice(result.message||'操作已完成');
     await poll();
-  }catch(error){if(options.autoKey){autoRefreshState.set(options.autoKey,'failed');markAutoRefreshAttempt(options.autoKey,'failed');}if(!options.silent)notice(error.message,true);}
+  }catch(error){if(options.autoKey){autoRefreshState.set(options.autoKey,'failed');markAutoRefreshAttempt(options.autoKey,'failed');}if(loginVerificationAction){$('loginError').textContent=error.message;$('loginError').hidden=false;}else if(!options.silent)notice(error.message,true);}
   finally{busy=false;if(name==='activation-connect')releaseAutoRefreshLease(requestedAccount);document.body.classList.remove('busy');if(familyAction)$('familyCard').classList.remove('is-loading');if(hmeAction)$('hmeCard').classList.remove('is-loading');if(current)render(current);}
 }
 $('reloadView').addEventListener('click',poll);$('codeButton').addEventListener('click',()=>action('code'));$('devicesButton').addEventListener('click',()=>action('devices'));$('devicesReconnectButton').addEventListener('click',()=>openLogin('reconnect'));$('renewButton').addEventListener('click',()=>action('validate-account'));
@@ -298,14 +335,44 @@ $('purchaseButton').addEventListener('click',()=>{if(!purchaseAction||!purchaseL
 $('addAccountButton').addEventListener('click',()=>openLogin('add'));$('addAccountButtonSecondary').addEventListener('click',()=>openLogin('add'));$('removeAccountButton').addEventListener('click',async()=>{if(busy)return;if(!selectedAccount){notice('当前是内置账号，先在左侧选择要移除的账号',true);return;}if(!confirm('从列表移除该账号？设备身份仍保留在磁盘上，可重新添加。'))return;busy=true;try{const result=await api('accounts/remove',{id:selectedAccount});if(!result.ok)throw new Error(result.message);notice(result.message);selectedAccount='';localStorage.removeItem('selected-account');}catch(error){notice(error.message,true);}finally{busy=false;await poll();}});
 $('copyButton').addEventListener('click',async()=>{if(!privateCode)return;try{await navigator.clipboard.writeText(privateCode);notice('验证码已复制');}catch{notice('复制失败，请手动输入屏幕上的验证码',true);}});
 $('allowButton').addEventListener('click',()=>{if(current?.pending)action('allow',{request_id:current.pending.id});});$('denyButton').addEventListener('click',()=>{if(current?.pending)action('deny',{request_id:current.pending.id});});
-$('startButton').addEventListener('click',()=>openLogin('reconnect'));$('closeLogin').addEventListener('click',()=>{$('password').value='';$('loginDialog').close();});$('loginDialog').addEventListener('close',()=>{$('password').value='';});
-$('loginForm').addEventListener('submit',async event=>{event.preventDefault();if(busy)return;busy=true;const creds={apple_id:$('appleID').value.trim(),password:$('password').value,twofactor:$('twofactor').value};$('password').value='';try{
-// Adding a different account always allocates its own directory; signing into
-// the selected account restarts only that account's worker.
-if(loginMode==='reconnect'&&loginAccount!==selectedAccount)throw new Error('当前账号已切换，请重新打开连接窗口');const result=await api(loginMode==='add'?'accounts/add':'start',creds);if(!result.ok)throw new Error(result.message);$('loginDialog').close();notice(result.message);await poll();}catch(error){notice(error.message,true);$('password').focus();}finally{busy=false;creds.password='';await poll();}});
+$('startButton').addEventListener('click',()=>openLogin('reconnect'));
+$('twofactor').addEventListener('change',verificationHelp);
+$('loginRetryButton').addEventListener('click',()=>{if(busy)return;prepareLogin('reconnect');if(current)renderLogin(current);$('password').focus();});
+$('loginForm').addEventListener('submit',async event=>{
+  event.preventDefault();if(busy)return;
+  const mode=loginMode,account=loginAccount,creds={apple_id:$('appleID').value.trim(),password:$('password').value,twofactor:$('twofactor').value};
+  busy=true;loginSubmitting=true;$('password').value='';$('loginError').hidden=true;if(current)renderLogin(current);
+  try{
+    if(mode==='reconnect'&&account!==selectedAccount)throw new Error('当前账号已切换，请重新选择要连接的账号');
+    const result=await api(mode==='add'?'accounts/add':'start',creds);
+    if(!result.ok)throw new Error(result.message||'登录未完成，请重试');
+    if(mode==='add'){
+      if(!result.account)throw new Error('服务未返回新增账号，请刷新后在账号列表中选择');
+      selectedAccount=result.account;localStorage.setItem('selected-account',selectedAccount);
+    }
+    loginAccount=selectedAccount;loginStartedAccount=selectedAccount;loginMode='reconnect';
+    if(location.hash==='#login-add')history.replaceState(null,'','#login');
+    await poll();
+  }catch(error){if(isLoginPage()){$('loginError').textContent=error.message;$('loginError').hidden=false;loginStartedAccount='';}}
+  finally{busy=false;loginSubmitting=false;creds.password='';if(current)renderLogin(current);await poll();if(isLoginPage()&&!$('loginError').hidden)$('password').focus();}
+});
 $('smsForm').addEventListener('submit',event=>{event.preventDefault();const code=$('smsCode').value;$('smsCode').value='';action(current?.status?.state==='awaiting_account_validation'?'submit-account-code':'submit-sms',{code});});$('resendButton').addEventListener('click',()=>action('resend-sms'));
 $('pairingForm').addEventListener('submit',event=>{event.preventDefault();const code=$('pairingCode').value;$('pairingCode').value='';action('submit-pairing',{code});});
 $('stopButton').addEventListener('click',()=>{$('stopDialog').showModal();});$('cancelStop').addEventListener('click',()=>{$('stopDialog').close();});$('confirmStop').addEventListener('click',async()=>{if(busy)return;busy=true;$('stopDialog').close();try{const result=await api('stop',{account:selectedAccount});if(!result.ok)throw new Error(result.message);clearCode();notice(result.message);await poll();}catch(error){notice(error.message,true);}finally{busy=false;await poll();}});
-function applyRoute(){const route=(location.hash||'#overview').slice(1);const page=['overview','devices','requests'].includes(route)?route:'overview';document.querySelector('main').className='view-'+page;const headings={overview:['设备与登录','在一处管理设备身份、登录状态和验证码。'],devices:['我的设备','查看和刷新当前账号关联的设备。'],requests:['登录请求','处理 Apple 设备发来的登录确认。']};$('pageTitle').textContent=headings[page][0];$('pageDescription').textContent=headings[page][1];for(const item of document.querySelectorAll('nav a'))item.classList.toggle('selected',item.getAttribute('href')==='#'+page);}
-for(const link of document.querySelectorAll('nav a'))link.addEventListener('click',applyRoute);window.addEventListener('hashchange',applyRoute);applyRoute();
-requestAnimationFrame(()=>requestAnimationFrame(()=>document.body.classList.add('ui-ready')));poll();setInterval(poll,2500);setInterval(tickCode,500);window.addEventListener('pagehide',clearCode);
+function applyRoute(){
+  const route=(location.hash||'#overview').slice(1),login=['login','login-add'].includes(route),page=login?'login':['overview','devices','requests'].includes(route)?route:'overview';
+  document.querySelector('main').className='view-'+page;
+  if(login){
+    const mode=route==='login-add'?'add':'reconnect';
+    if(!loginFormReady||loginMode!==mode)prepareLogin(mode,true);
+    const label={'#devices':'返回我的设备','#requests':'返回登录请求','#overview':'返回概览'}[loginReturnRoute]||'返回概览';
+    $('loginBackLink').setAttribute('href',loginReturnRoute);$('loginBackLink').textContent='← '+label;
+  }else{$('password').value='';$('smsCode').value='';$('pairingCode').value='';loginFormReady=false;loginStartedAccount='';}
+  const target=$(login?'loginVerification':'overviewVerification');for(const id of ['smsPanel','activationCard','pairingPanel'])target.append($(id));
+  const headings={overview:['设备与登录','在一处管理设备身份、登录状态和验证码。'],devices:['我的设备','查看和刷新当前账号关联的设备。'],requests:['登录请求','处理 Apple 设备发来的登录确认。'],login:['账户登录','连接账户并完成身份验证。']};
+  $('pageTitle').textContent=headings[page][0];$('pageDescription').textContent=headings[page][1];
+  for(const item of document.querySelectorAll('nav a'))item.classList.toggle('selected',item.getAttribute('href')==='#'+page);
+  if(current)renderLogin(current);
+}
+window.addEventListener('hashchange',applyRoute);applyRoute();
+requestAnimationFrame(()=>requestAnimationFrame(()=>document.body.classList.add('ui-ready')));poll();setInterval(poll,2500);setInterval(tickCode,500);window.addEventListener('pagehide',()=>{clearCode();$('password').value='';$('smsCode').value='';$('pairingCode').value='';});

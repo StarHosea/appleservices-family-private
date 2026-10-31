@@ -1230,7 +1230,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if id != "" {
 				result.Message = strings.TrimSpace(result.Message)
 			}
-			json.NewEncoder(w).Encode(result)
+			json.NewEncoder(w).Encode(struct {
+				control.Result
+				Account string `json:"account,omitempty"`
+			}{Result: result, Account: id})
 			return
 		case r.Method == "POST" && r.URL.Path == "/api/accounts/remove":
 			var body struct {
