@@ -200,6 +200,43 @@ func TestLastProcessErrorDoesNotExposeLogSecrets(t *testing.T) {
 	}
 }
 
+func TestDashboardRestoresAccountRepairStatus(t *testing.T) {
+	for _, test := range []struct{ state, diagnostic string }{
+		{"account_repair_required", "trusted-device: appleservices: login: gsa: Apple account repair required"},
+		{"failed", `trusted-device: appleservices: login: gsa: unsupported authentication continuation "repair"`},
+		{"failed", "unrecognized failure with private-account-value"},
+	} {
+		t.Run(test.diagnostic, func(t *testing.T) {
+			dir := t.TempDir()
+			server, err := New(Config{Dir: dir, Port: 0})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer server.listener.Close()
+			data, _ := json.Marshal(Status{State: test.state, FailureStage: "signing_in"})
+			if err := os.WriteFile(filepath.Join(dir, "runtime.json"), data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "daemon.err.log"), []byte(test.diagnostic+"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			view := server.snapshot(context.Background())
+			if strings.Contains(test.diagnostic, "private-account-value") {
+				if view.Status.State != "failed" || strings.Contains(view.Message, "private-account-value") {
+					t.Fatal("unrelated failure misclassified or raw log exposed")
+				}
+				return
+			}
+			if view.Status.State != "account_repair_required" || view.Message != accountRepairMessage {
+				t.Fatal("repair guidance lost after dashboard restart")
+			}
+			if view.Status.Running || view.Status.Authenticated || view.Status.VerificationRequired || view.Status.FailureStage != "signing_in" {
+				t.Fatal("repair shown as authenticated or as an SMS challenge")
+			}
+		})
+	}
+}
+
 func TestLastProcessErrorMapsRejectedPasswordWithoutExposingLog(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "worker.err")
 	line := "trusted-device: gsa: complete rejected (protocol=s2k, ec=-22406) - server said: Enter the correct password for this Apple Account."

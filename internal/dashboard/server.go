@@ -336,6 +336,12 @@ func (s *Server) readStatusFrom(dir string) Status {
 		if status.State == "online" {
 			status.State = "stopped"
 		}
+		// Recognize a repair response left by an older worker, without retrying
+		// authentication or changing the account's saved state.
+		if status.State == "failed" && lastProcessError(filepath.Join(dir, "daemon.err.log")) == accountRepairMessage {
+			status.State = "account_repair_required"
+			status.VerificationRequired = false
+		}
 	}
 	return status
 }
@@ -822,6 +828,9 @@ func (s *Server) snapshotFor(ctx context.Context, id string) view {
 		result.Launching, result.Message = account.launching, account.message
 		account.mu.Unlock()
 	}
+	if result.Status.State == "account_repair_required" {
+		result.Message = accountRepairMessage
+	}
 	result.Accounts = s.listAccounts(ctx)
 	result.Selected = id
 	if account != nil {
@@ -989,7 +998,11 @@ func (s *Server) startInMode(ctx context.Context, dir string, creds credentials,
 		if err := command.Wait(); err != nil {
 			message := "后台异常停止，请重新连接"
 			if detail := lastProcessError(diagnostic.Name()); detail != "" {
-				message += "：" + detail
+				if detail == accountRepairMessage {
+					message = detail
+				} else {
+					message += "：" + detail
+				}
 			}
 			s.setMessage(account, message)
 		}
@@ -999,6 +1012,8 @@ func (s *Server) startInMode(ctx context.Context, dir string, creds credentials,
 	}
 	return control.Result{OK: true, Message: "正在连接 Apple，请稍等"}
 }
+
+const accountRepairMessage = "Apple 要求先完成账户修复，当前登录尚未完成。请前往 https://account.apple.com/ 或 Apple 官方设备的账户设置，按提示完成处理后再回来连接；切换短信方式无法跳过此步骤。"
 
 func lastProcessError(path string) string {
 	data, err := os.ReadFile(path)
@@ -1013,6 +1028,8 @@ func lastProcessError(path string) string {
 		}
 		// Never forward arbitrary stderr (which can contain credentials).
 		switch {
+		case strings.Contains(line, "gsa: Apple account repair required"), strings.Contains(line, `gsa: unsupported authentication continuation "repair"`):
+			return accountRepairMessage
 		case strings.Contains(line, "a provisioned device state is required"):
 			return "所选目录缺少有效设备身份，请选择已有账号，或通过添加账号建立身份"
 		case strings.Contains(line, "APPLESERVICES_APPLEID and APPLESERVICES_PASSWORD are required"):

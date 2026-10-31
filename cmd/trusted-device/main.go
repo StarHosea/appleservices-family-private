@@ -174,7 +174,10 @@ func run() (runErr error) {
 	defer func() {
 		status.Running, status.PushConnected = false, false
 		status.Authenticated = false
-		if status.State != "verification_required" {
+		if errors.Is(runErr, gsa.ErrAccountRepairRequired) {
+			status.FailureStage, status.State = status.State, "account_repair_required"
+			status.VerificationRequired = false
+		} else if status.State != "verification_required" {
 			if runErr != nil {
 				status.FailureStage, status.State = status.State, "failed"
 			} else {

@@ -41,6 +41,10 @@ docker compose down
 
 账号状态保存在 `account-data` 命名卷，停止/升级容器保留状态。不要使用 `docker compose down -v`，除非明确要删除全部身份与会话。首次部署使用空卷；不要直接混入其他账号的证书或 Windows 机器状态。本次变更未验证旧 Windows 状态的直接迁移。
 
+## 首次登录提示账户修复
+
+Apple 在密码认证阶段返回 `au=repair` 时，程序不会将它当作短信挑战或成功登录。页面显示“需要完成 Apple 账户修复”，保留账号的独立设备身份，并停止本次登录。请在 `https://account.apple.com/` 或 Apple 官方设备的账户设置中查看并完成提示的处理，再回到面板重新连接。这个返回值本身不说明具体修复事项；不能据此断定密码错误、短信限流或只需接受条款。切换“发送新的短信验证码”和“使用已有短信码”无法跳过该状态。
+
 ## 远程访问
 
 Compose 默认仅把端口发布到宿主机回环地址。使用 HTTPS 反向代理时，将 `APPLESERVICES_PUBLIC_URL` 设为浏览器访问的精确来源（例如 `https://apple.example.com`），然后重新启动。代理需保留该来源的 `Host`，并转发 `Authorization`。无需启用跨域 CORS。

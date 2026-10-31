@@ -1,6 +1,24 @@
 package gsa
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+// ErrAccountRepairRequired means Apple requires an account flow that must be
+// completed in an official client. It is not an SMS challenge or a login success.
+var ErrAccountRepairRequired = errors.New("gsa: Apple account repair required")
+
+func checkAuthenticationContinuation(continuation string) error {
+	switch continuation {
+	case "", "trustedDeviceSecondaryAuth", "secondaryAuth":
+		return nil
+	case "repair":
+		return ErrAccountRepairRequired
+	default:
+		return fmt.Errorf("gsa: unsupported authentication continuation %q", continuation)
+	}
+}
 
 // AuthenticationError distinguishes transport rejection from a GSA error.
 // Codes are reported without claiming a protocol failure is a wrong password.

@@ -98,6 +98,28 @@ func TestGrandSlamStopsOnUnknownProtocol(t *testing.T) {
 	}
 }
 
+func TestAuthenticationContinuationRequiresOfficialRepair(t *testing.T) {
+	for _, continuation := range []string{"", "secondaryAuth", "trustedDeviceSecondaryAuth", "repair", "future-flow"} {
+		t.Run(continuation, func(t *testing.T) {
+			err := checkAuthenticationContinuation(continuation)
+			switch continuation {
+			case "repair":
+				if !errors.Is(err, ErrAccountRepairRequired) {
+					t.Fatal("repair was not distinguished from an unsupported flow")
+				}
+			case "future-flow":
+				if err == nil || errors.Is(err, ErrAccountRepairRequired) {
+					t.Fatal("unknown continuation was accepted or classified as repair")
+				}
+			default:
+				if err != nil {
+					t.Fatal("supported login continuation rejected", err)
+				}
+			}
+		})
+	}
+}
+
 func TestGrandSlamErrorsIdentifyStage(t *testing.T) {
 	// 429 and 5xx are dropped requests, not answers: they are resent, and only
 	// a permanent status is reported as an HTTP rejection.

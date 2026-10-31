@@ -441,8 +441,8 @@ func (c *Client) Login(username, password string) (*LoginResult, error) {
 	}
 
 	au, _ := status["au"].(string)
-	if au != "" && au != "trustedDeviceSecondaryAuth" && au != "secondaryAuth" {
-		return nil, fmt.Errorf("gsa: unsupported authentication continuation %q", au)
+	if err := checkAuthenticationContinuation(au); err != nil {
+		return nil, err
 	}
 	needsTwoFactor := au == "trustedDeviceSecondaryAuth" || au == "secondaryAuth"
 	c.loginPayload = sessionPayload
