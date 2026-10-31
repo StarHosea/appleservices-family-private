@@ -93,6 +93,9 @@ jobs:
             mv "$HOME/apps/applefamily/compose.yaml.new" "$HOME/apps/applefamily/compose.yaml"
             umask 077
             printf "APPLESERVICES_IMAGE=ghcr.io/starhosea/appleservices-family-private\\nAPPLESERVICES_TAG=latest\\nAPPLESERVICES_PUBLIC_URL=https://applefamily.shuangdeng.space\\nAPPLESERVICES_ADMIN_USERNAME=mhx\\n" > "$HOME/apps/applefamily/.env.new"
+            if test -f "$HOME/apps/applefamily/.env"; then
+              sed -n "/^APPLESERVICES_SYNC_TOKEN=/p" "$HOME/apps/applefamily/.env" >> "$HOME/apps/applefamily/.env.new"
+            fi
             mv "$HOME/apps/applefamily/.env.new" "$HOME/apps/applefamily/.env"
             cd "$HOME/apps/applefamily"
             docker compose pull appleservices

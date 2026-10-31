@@ -32,6 +32,7 @@ var assets embed.FS
 type Config struct {
 	Dir, Worker, Library, Python, MacPushSetup string
 	Listen, PublicURL, AdminToken              string
+	SyncToken                                  string
 	AdminUsername, AdminPassword               string
 	Port                                       int
 }
@@ -111,6 +112,9 @@ type credentials struct {
 }
 
 func New(config Config) (*Server, error) {
+	if config.SyncToken != "" && (len(config.SyncToken) < 32 || len(config.SyncToken) > 4096 || strings.ContainsAny(config.SyncToken, "\r\n")) {
+		return nil, errors.New("session sync token must contain at least 32 characters without line breaks")
+	}
 	address, err := listenAddress(config)
 	if err != nil {
 		return nil, err
@@ -1194,6 +1198,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	originURL, _ := url.Parse(s.URL())
 	if r.Host != originURL.Host {
 		http.Error(w, "local host required", 403)
+		return
+	}
+	if r.URL.Path == "/api/open/v1/sessions" || strings.HasPrefix(r.URL.Path, "/api/open/v1/sessions/") {
+		s.serveSessionSync(w, r)
 		return
 	}
 	if !s.authorize(w, r) {

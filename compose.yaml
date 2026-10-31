@@ -11,6 +11,7 @@ services:
       APPLESERVICES_ADMIN_USERNAME: ${APPLESERVICES_ADMIN_USERNAME:-admin}
       APPLESERVICES_ADMIN_TOKEN_FILE: /run/secrets/admin_token
       APPLESERVICES_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+      APPLESERVICES_SYNC_TOKEN: ${APPLESERVICES_SYNC_TOKEN:-}
     secrets:
       - admin_token
       - admin_password

@@ -36,6 +36,7 @@ func Main() {
 	tokenFile := flag.String("admin-token-file", env("APPLESERVICES_ADMIN_TOKEN_FILE", ""), "file containing the administrator token")
 	adminUsername := flag.String("admin-username", env("APPLESERVICES_ADMIN_USERNAME", "admin"), "administrator username for HTTP Basic authentication")
 	passwordFile := flag.String("admin-password-file", env("APPLESERVICES_ADMIN_PASSWORD_FILE", ""), "file containing the HTTP Basic administrator password")
+	syncTokenFile := flag.String("sync-token-file", env("APPLESERVICES_SYNC_TOKEN_FILE", ""), "file containing the read-only session synchronization token")
 	healthcheck := flag.Bool("healthcheck", false, "check the local HTTP listener and exit")
 	flag.Parse()
 	if *healthcheck {
@@ -82,12 +83,22 @@ func Main() {
 		adminPassword = strings.TrimSpace(string(data))
 	}
 	absDir, _ := filepath.Abs(*dir)
+	syncToken := os.Getenv("APPLESERVICES_SYNC_TOKEN")
+	os.Unsetenv("APPLESERVICES_SYNC_TOKEN")
+	if *syncTokenFile != "" {
+		data, err := os.ReadFile(*syncTokenFile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Cannot read session sync token file")
+			os.Exit(1)
+		}
+		syncToken = strings.TrimSpace(string(data))
+	}
 	absWorker, _ := filepath.Abs(*worker)
 	absLibrary, _ := filepath.Abs(*library)
 	absMacPushSetup, _ := filepath.Abs(*macPushSetup)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	server, err := dashboard.New(dashboard.Config{Dir: absDir, Worker: absWorker, Library: absLibrary, Python: *python, MacPushSetup: absMacPushSetup, Port: *port, Listen: *listen, PublicURL: strings.TrimRight(*publicURL, "/"), AdminToken: adminToken, AdminUsername: *adminUsername, AdminPassword: adminPassword})
+	server, err := dashboard.New(dashboard.Config{Dir: absDir, Worker: absWorker, Library: absLibrary, Python: *python, MacPushSetup: absMacPushSetup, Port: *port, Listen: *listen, PublicURL: strings.TrimRight(*publicURL, "/"), AdminToken: adminToken, AdminUsername: *adminUsername, AdminPassword: adminPassword, SyncToken: syncToken})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

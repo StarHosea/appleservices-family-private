@@ -68,10 +68,27 @@ Compose 默认仅把端口发布到宿主机回环地址。使用 HTTPS 反向�
 | `APPLESERVICES_ADMIN_TOKEN_FILE` | 至少 32 字符的管理员凭据文件 |
 | `APPLESERVICES_ADMIN_USERNAME` | HTTP Basic 管理员用户名，默认 `admin` |
 | `APPLESERVICES_ADMIN_PASSWORD_FILE` | HTTP Basic 管理员密码文件，至少 8 字符 |
+| `APPLESERVICES_SYNC_TOKEN` | 可选的只读会话同步密钥，至少 32 字符；留空关闭开放同步接口 |
+| `APPLESERVICES_SYNC_TOKEN_FILE` | 同步密钥文件；也可使用 `-sync-token-file`，优先于环境变量 |
 | `APPLESERVICES_ADI_LIBRARY` | 固定 Linux 模块的路径；镜像已配置 |
 | `APPLESERVICES_ADI_FENCE` | 同一镜像编译的 ADI 辅助进程传输隔离库；镜像已配置 |
 
 SIGTERM 会停止该服务管理的账号后台并保留身份。控制端口仍只监听容器回环地址，不对外发布。镜像以 UID/GID 10001 运行，Compose 不授予 Linux capabilities 或特权。
+
+## 与 cloud-main-center 同步账户会话
+
+在 Compose 所在目录的私有 `.env` 中配置 `APPLESERVICES_SYNC_TOKEN=<至少32字符的独立随机密钥>`，执行 `docker compose up -d appleservices` 使配置生效。可使用 `openssl rand -hex 32` 生成密钥；不要复用管理员凭据，也不要提交 `.env`。自动部署会保留已有的这一行配置。直接运行二进制时也可以通过 `APPLESERVICES_SYNC_TOKEN_FILE` 或 `-sync-token-file` 提供权限受限的密钥文件。
+
+在 cloud-main-center「系统设置 → 账户会话同步」填写本服务的 HTTPS 来源地址、相同密钥，并选择新增账户使用的收件配置，点击「一键同步账户会话」。已有账户按 Apple ID 匹配，保留原 ID、收件绑定、库存及自动创建设置；仅新增或更新，来源移除或缺少账户不会删除目标账户。首次同步传输可用会话；之后只拉取凭据版本有变化的会话，失败项下次重试。
+
+独立开放接口（代理必须保留公开来源 Host 与 Authorization）：
+
+- `GET /api/open/v1/sessions`：返回 `version: 1`、`items: [{id, appleId, revision, updatedAt}]`、`unavailable`。清单不含 Cookie、令牌或 DSID。
+- `GET /api/open/v1/sessions/{id}?revision=<revision>`：返回 `version: 1`、`revision`、`session`。session 包括 `appleId`、`dsid`、`clientId`、`hmeUrl`、`accountCountryCode`、`authToken`、`trustToken` 及保留作用域和有效期的 Cookie 数组。版本发生变化时返回 409，下次同步重新读取清单。
+
+两者要求 `Authorization: Bearer <同步密钥>`，响应禁止缓存，不接受浏览器 Origin；同步密钥不能操作管理面板。密钥未配置时接口返回 404。它只读取各账户已保存的 HME Web 会话，不重新登录、不接受条款，也不创建隐私邮箱。仅完成受信任设备普通登录、尚未完成隐私邮箱 Web 登录的账户计入 `unavailable`；应先在本服务完成其 Web 验证。目标会再次向 Apple 验证会话，实际可用性以 Apple 返回为准。
+
+会话包含可用的认证材料，应只将同步密钥交给受信任的目标服务，并通过 HTTPS 或可信本机连接访问。目标加密保存密钥和会话，普通设置读取不返回密钥原文。
 
 ## 构建与真实运行时检查
 
