@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,5 +63,64 @@ func TestRequireHMEFamilyMemberRejectsOrganizerAndStaleCache(t *testing.T) {
 	write(dir, now.Add(-16*time.Minute), member)
 	if err := requireHMEFamilyMember(dir, now); err == nil {
 		t.Fatal("stale family cache was accepted")
+	}
+}
+
+// The container resumes workers without retaining account passwords. Sending a
+// reachable-email challenge must offer authentication in that same operation.
+type fakeReachableEmailClient struct {
+	resumeErr, authErr, sendErr error
+	calls                       []string
+	password                    string
+}
+
+func (c *fakeReachableEmailClient) Resume(context.Context) error {
+	c.calls = append(c.calls, "resume")
+	return c.resumeErr
+}
+func (c *fakeReachableEmailClient) Authenticate(_ context.Context, password string, _ func(context.Context) (string, error)) error {
+	c.calls = append(c.calls, "authenticate")
+	c.password = password
+	return c.authErr
+}
+func (c *fakeReachableEmailClient) BeginReachableEmail(_ context.Context, address, password string) error {
+	c.calls = append(c.calls, "send")
+	c.password = password
+	return c.sendErr
+}
+func (c *fakeReachableEmailClient) AuthenticationFailure() (string, int) {
+	return "test-failure", 403
+}
+
+func TestStartReachableEmailAuthentication(t *testing.T) {
+	required := icloud.ErrAccountManagementAuthenticationRequired
+	rejected := errors.New("Apple rejected request")
+	for _, test := range []struct {
+		name                        string
+		password                    string
+		resumeErr, authErr, sendErr error
+		wantStage                   string
+		wantCalls                   string
+		wantOK                      bool
+		wantHTTP                    int
+	}{
+		{name: "resumed worker without management session", resumeErr: required, wantStage: "hme-reachable-auth-required", wantCalls: "resume"},
+		{name: "inline password restores management session", password: "test-only-password", resumeErr: required, wantStage: "hme-reachable-code", wantCalls: "resume,authenticate,send", wantOK: true},
+		{name: "saved management session needs no password", wantStage: "hme-reachable-code", wantCalls: "resume,send", wantOK: true},
+		{name: "saved session requires password for profile edit", sendErr: required, wantStage: "hme-reachable-auth-required", wantCalls: "resume,send"},
+		{name: "inline password reaches profile edit", password: "test-only-password", wantStage: "hme-reachable-code", wantCalls: "resume,send", wantOK: true},
+		{name: "authentication rejected without sending", password: "test-only-password", resumeErr: required, authErr: rejected, wantStage: "hme-reachable-auth-test-failure", wantCalls: "resume,authenticate", wantHTTP: 403},
+		{name: "send rejected is not reported as sent", sendErr: rejected, wantStage: "hme-reachable-test-failure", wantCalls: "resume,send", wantHTTP: 403},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeReachableEmailClient{resumeErr: test.resumeErr, authErr: test.authErr, sendErr: test.sendErr}
+			result := startReachableEmail(context.Background(), client, "target@example.test", test.password, nil)
+			if result.Stage != test.wantStage || result.OK != test.wantOK || result.HTTPStatus != test.wantHTTP || strings.Join(client.calls, ",") != test.wantCalls {
+				t.Fatalf("unexpected challenge result: stage=%s ok=%v status=%d calls=%v", result.Stage, result.OK, result.HTTPStatus, client.calls)
+			}
+			if test.wantOK && client.password != test.password {
+				t.Fatal("inline password did not reach the profile-edit challenge")
+			}
+		})
 	}
 }
