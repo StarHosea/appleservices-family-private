@@ -18,6 +18,19 @@ func (s fileStore) devicePath() string   { return filepath.Join(s.dir, "device.j
 func (s fileStore) sessionPath() string  { return filepath.Join(s.dir, "session.json") }
 func (s fileStore) acceptedPath() string { return filepath.Join(s.dir, "icloud-accepted.json") }
 
+func (s fileStore) SaveAcceptedICloud(appleID string, accepted appleservices.RestoredICloudSession) error {
+	saved, err := s.LoadSession()
+	if err != nil || saved == nil || !strings.EqualFold(saved.AppleID, appleID) || saved.DSID == "" || saved.DSID != accepted.ADSID ||
+		accepted.DSID == "" || accepted.MMEAuthToken == "" || accepted.ServiceData == nil {
+		return errors.New("accepted iCloud checkpoint account binding is invalid")
+	}
+	return writeJSONFile(s.acceptedPath(), map[string]any{
+		"session": appleservices.Session{AppleID: saved.AppleID, DSID: accepted.DSID,
+			Tokens: map[string]string{"mmeAuthToken": accepted.MMEAuthToken, "cloudKitToken": accepted.CloudKitToken}},
+		"adsid": accepted.ADSID, "service-data": accepted.ServiceData,
+	})
+}
+
 func (s fileStore) LoadDevice() (*appleservices.Device, error) {
 	data, err := os.ReadFile(s.devicePath())
 	if err != nil {

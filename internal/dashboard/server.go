@@ -681,6 +681,11 @@ func (s *Server) resolveCachedFamilyOrganizer(currentAccount *Account, current *
 }
 
 func (s *Server) familyAction(ctx context.Context, account *Account, joinStorage bool) control.Result {
+	if account != nil && !joinStorage && !acceptedCheckpointReady(account.Dir, account.AppleID) {
+		if result := s.activationAction(ctx, account, true, ""); !result.OK {
+			return result
+		}
+	}
 	if account == nil || !acceptedCheckpointReady(account.Dir, account.AppleID) {
 		return control.Result{Message: "当前账号尚未完成 iCloud 激活", Stage: "family-preflight"}
 	}
@@ -1273,8 +1278,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				json.NewEncoder(w).Encode(result)
 				return
 			}
-			if selected != nil && (action.Action == "activation-plan" || action.Action == "activation-accept") {
-				result = s.activationAction(r.Context(), selected, action.Action == "activation-accept", action.Code)
+			if selected != nil && (action.Action == "activation-plan" || action.Action == "activation-accept" || action.Action == "activation-connect") {
+				if action.Action == "activation-accept" && action.Code == "" {
+					result = control.Result{Stage: "activation-consent", Message: "缺少条款版本"}
+				} else {
+					result = s.activationAction(r.Context(), selected, action.Action != "activation-plan", action.Code)
+				}
+				cacheSafeActionResult(selected, &result)
 				json.NewEncoder(w).Encode(result)
 				return
 			}

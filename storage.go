@@ -13,6 +13,28 @@ type StoragePlanInfo = icloud.StoragePlanInfo
 type PurchaseTarget = icloud.PurchaseTarget
 type PurchaseResult = icloud.PurchaseResult
 
+// CheckpointICloud preserves an already accepted login for read-only helpers.
+// A password/2FA result alone is insufficient: verify its live quota first.
+func (l *Login) CheckpointICloud(ctx context.Context) (*StorageInfo, error) {
+	store, ok := l.store.(interface {
+		SaveAcceptedICloud(string, RestoredICloudSession) error
+	})
+	if !ok {
+		return nil, errors.New("appleservices: store cannot save accepted iCloud sessions")
+	}
+	info, err := l.StorageInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := l.SaveSession(); err != nil {
+		return nil, err
+	}
+	c := l.client
+	err = store.SaveAcceptedICloud(l.creds.AppleID, RestoredICloudSession{DSID: c.DSID, ADSID: c.ADSID,
+		MMEAuthToken: c.MMEAuthToken, CloudKitToken: c.CloudKitToken, ServiceData: c.serviceData})
+	return info, err
+}
+
 func (l *Login) PreviewStoragePurchase(ctx context.Context) (*icloud.StoreFormInfo, error) {
 	info, err := l.StoragePlanInfo(ctx)
 	if err != nil {

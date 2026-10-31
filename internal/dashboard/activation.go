@@ -175,6 +175,15 @@ func (s *Server) activationAction(parent context.Context, account *Account, acce
 		result.Activation = &control.ActivationInfo{Completed: result.OK}
 		return result
 	}
+	// Reuse the worker's successful delegate instead of signing in again or
+	// forcing every authenticated account through the terms-update page.
+	if accept && approvedTuple == "" && s.accountStatus(account).Authenticated {
+		var result control.Result
+		if err := s.callFor(parent, account.Dir, "/action", control.Action{Action: "icloud-checkpoint"}, &result); err == nil && result.OK && acceptedCheckpointReady(account.Dir, account.AppleID) {
+			return result
+		}
+		return control.Result{Stage: "activation-checkpoint", Message: "已登录的 iCloud 会话保存未完成，请稍后重试"}
+	}
 	if !s.launchMu.TryLock() {
 		return control.Result{Message: "当前账号正在处理其他登录或激活操作", Stage: "activation-busy"}
 	}
@@ -194,6 +203,11 @@ func (s *Server) activationAction(parent context.Context, account *Account, acce
 	}
 	if !accept {
 		return control.Result{OK: true, Message: "Apple 要求接受当前 iCloud 与媒体服务条款", Stage: "activation-terms", Activation: plan}
+	}
+	// Automatic connection is an explicit dashboard operation covered by the
+	// owner's standing terms consent. Bind acceptance to Apple's current plan.
+	if approvedTuple == "" {
+		approvedTuple = activationTuple(plan)
 	}
 	if approvedTuple == "" || approvedTuple != activationTuple(plan) {
 		return control.Result{Message: "Apple 条款版本已变化，请重新查看并确认", Stage: "activation-consent", Activation: plan}

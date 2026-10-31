@@ -452,6 +452,11 @@ func run() (runErr error) {
 	if err := active.SaveSession(); err != nil {
 		return err
 	}
+	checkpointCtx, checkpointCancel := context.WithTimeout(ctx, 40*time.Second)
+	if _, err := login.CheckpointICloud(checkpointCtx); err != nil {
+		fmt.Fprintln(os.Stderr, "Read-only iCloud checkpoint not yet available; login remains active.")
+	}
+	checkpointCancel()
 	status.Authenticated, status.State = true, "online"
 	if err != nil {
 		status.State = "device_query_failed"
@@ -545,6 +550,13 @@ func run() (runErr error) {
 			return control.Result{Message: "续登录失败，请检查登录状态"}
 		}
 		active = renewed
+		if writer, ok := active.(interface {
+			CheckpointICloud(context.Context) (*appleservices.StorageInfo, error)
+		}); ok {
+			checkpointCtx, done := context.WithTimeout(ctx, 40*time.Second)
+			_, _ = writer.CheckpointICloud(checkpointCtx)
+			done()
+		}
 		status.State, status.Authenticated = "online", true
 		status.LastRefreshAt = time.Now().UTC()
 		status.RefreshCount++
@@ -589,6 +601,19 @@ func run() (runErr error) {
 		return hmeClient.List(actionCtx)
 	}
 	performAction := func(actionCtx context.Context, action, visibleRequestID, commandCode, commandLabel, commandNote, commandPassword string) control.Result {
+		if action == "icloud-checkpoint" {
+			writer, ok := active.(interface {
+				CheckpointICloud(context.Context) (*appleservices.StorageInfo, error)
+			})
+			if !ok {
+				return control.Result{Stage: "activation-worker", Message: "后台版本不支持保存 iCloud 会话"}
+			}
+			info, err := writer.CheckpointICloud(actionCtx)
+			if err != nil {
+				return control.Result{Stage: "activation-checkpoint", Message: "iCloud 会话验证或保存未完成，登录仍保留"}
+			}
+			return control.Result{OK: true, Storage: info, Stage: "activation-completed", Message: "已验证并保存当前 iCloud 会话", Activation: &control.ActivationInfo{Completed: true}}
+		}
 		if action == "hme-authenticate" {
 			queryCtx, done := context.WithTimeout(actionCtx, 115*time.Second)
 			defer done()

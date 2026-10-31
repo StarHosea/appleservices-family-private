@@ -87,6 +87,16 @@ func decodeObject(data []byte) (map[string]any, error) {
 	return nil, errors.New("response is not JSON or plist")
 }
 
+// Apple's UI error is not a membership result. Only a separately verified
+// positive eligibility response permits an empty-family read-only summary.
+func familyDetailsFromEligibility(data []byte) (map[string]any, error) {
+	eligibility, err := decodeObject(data)
+	if err != nil || familyResponseError(eligibility) || !boolValue(eligibility["eligible"]) {
+		return nil, errors.New("family details unavailable and eligibility was not confirmed")
+	}
+	return map[string]any{"is-member-of-family": false}, nil
+}
+
 func appleEndpoint(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	host := strings.ToLower(u.Hostname())
@@ -1003,10 +1013,12 @@ func run() error {
 			return errors.New("cannot preserve private family response")
 		}
 	}
+	mutating := *createFamily || *shareICloudStorage || *joinSharedStorage || *addPoolMemberDir != "" || *removePoolMemberDir != "" || *inviteAccountDir != "" || acceptedInvitation
 	details, err := decodeObject(detailsData)
-	if err != nil {
-		if *createFamily {
-			return errors.New("family was created but post-action family details are unavailable")
+	eligible, eligibilityKnown := false, false
+	if err != nil || familyResponseError(details) {
+		if mutating {
+			return errors.New("family details unavailable; mutation cannot be verified")
 		}
 		eligibilityRaw := stringValue(urls["checkFamilyEligibility"])
 		if eligibilityRaw == "" {
@@ -1018,31 +1030,19 @@ func run() error {
 		}
 		eligibilityResponse, requestErr := client.Do(eligibilityRequest)
 		if requestErr != nil {
-			return fmt.Errorf("family eligibility transport failed: %w", requestErr)
+			return errors.New("family eligibility transport failed")
 		}
 		eligibilityData, requestErr := readLimited(eligibilityResponse)
 		if requestErr != nil {
 			return requestErr
 		}
-		eligibility, decodeErr := decodeObject(eligibilityData)
-		if decodeErr != nil {
-			return errors.New("family details and eligibility returned Apple UI errors")
+		details, err = familyDetailsFromEligibility(eligibilityData)
+		if err != nil {
+			return err
 		}
-		keys := make([]string, 0, len(eligibility))
-		for key := range eligibility {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		eligible, hasEligible := eligibility["eligible"].(bool)
-		message := stringValue(eligibility["status-message"])
-		if len(message) > 160 {
-			message = message[:160]
-		}
-		fmt.Printf("family details unavailable; eligibility accepted; eligible-present=%t eligible=%t status-message=%q response-keys=%s; mutation-submitted=false\n", hasEligible, eligible, message, strings.Join(keys, ","))
-		return nil
+		eligible, eligibilityKnown = true, true
 	}
-	eligible, eligibilityKnown := false, false
-	if !boolValue(details["is-member-of-family"]) {
+	if !boolValue(details["is-member-of-family"]) && !eligibilityKnown {
 		eligibilityRaw := stringValue(urls["checkFamilyEligibility"])
 		if eligibilityRaw == "" {
 			return errors.New("account has no family and eligibility endpoint is missing")
@@ -1060,7 +1060,7 @@ func run() error {
 			return requestErr
 		}
 		eligibility, decodeErr := decodeObject(eligibilityData)
-		if decodeErr != nil {
+		if decodeErr != nil || familyResponseError(eligibility) {
 			return errors.New("family eligibility returned an unreadable response")
 		}
 		eligible, eligibilityKnown = eligibility["eligible"].(bool)

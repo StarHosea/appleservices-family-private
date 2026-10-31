@@ -155,3 +155,24 @@ func TestSummarizeFamilyMembersAndAccountBinding(t *testing.T) {
 		t.Fatalf("unexpected member binding %q", got)
 	}
 }
+
+func TestUnreadableFamilyNeedsPositiveEligibilityAndWritesEmptyMembers(t *testing.T) {
+	for _, input := range []string{`<html>Apple UI error</html>`, `null`, `{}`, `{"eligible":false}`, `{"eligible":true,"success":false}`} {
+		if _, err := familyDetailsFromEligibility([]byte(input)); err == nil {
+			t.Fatal("unconfirmed eligibility became an empty family")
+		}
+	}
+	details, err := familyDetailsFromEligibility([]byte(`{"eligible":true}`))
+	if err != nil || boolValue(details["is-member-of-family"]) {
+		t.Fatal("positive eligibility was not normalized")
+	}
+	path := filepath.Join(t.TempDir(), "members.json")
+	members, _ := details["family-members"].([]any)
+	if err := writeFamilyMemberAccounts(path, members); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "[]" {
+		t.Fatal("empty family must emit a usable private member array")
+	}
+}
