@@ -135,7 +135,7 @@ func New(config Config) (*Server, error) {
 	if config.AdminUsername == "" {
 		config.AdminUsername = "admin"
 	}
-	s := &Server{config: config, listener: listener, token: hex.EncodeToString(key)}
+	s := &Server{config: config, listener: listener, token: hex.EncodeToString(key), webSessions: loadWebSessions(config.Dir)}
 	s.provisionMacPush = s.runMacPushProvisioner
 	if entries, err := loadRegistry(config.Dir, config.Dir); err != nil {
 		// Surfaced rather than swallowed: an unreadable registry previously

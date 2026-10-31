@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -132,5 +133,34 @@ func TestWebSessionRotationExpiryAndLoginLimit(t *testing.T) {
 	s.loginWindow = time.Now().Add(-2 * time.Minute)
 	if w := authRequest(s, "POST", "/login", s.URL(), "operator", "test-only-password", nil, ""); w.Code != 303 {
 		t.Fatal("login limit did not expire")
+	}
+}
+
+func TestWebSessionSurvivesServerRestart(t *testing.T) {
+	dir := t.TempDir()
+	config := Config{Dir: dir, Listen: "127.0.0.1:0", PublicURL: "https://apple.example",
+		AdminToken: strings.Repeat("t", 40), AdminUsername: "operator", AdminPassword: "test-only-password"}
+	first, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	login := authRequest(first, "POST", "/login", first.URL(), "operator", "test-only-password", nil, "")
+	cookies := login.Result().Cookies()
+	if login.Code != http.StatusSeeOther || len(cookies) != 1 {
+		t.Fatal("initial login did not issue a session")
+	}
+	cookie := cookies[0]
+	first.listener.Close()
+
+	second, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.listener.Close()
+	if !second.webAuthorized(cookieRequest(second, cookie)) {
+		t.Fatal("persisted browser session was not restored after server restart")
+	}
+	if _, err := os.Stat(webSessionsPath(dir)); err != nil {
+		t.Fatalf("persistent browser session file missing: %v", err)
 	}
 }

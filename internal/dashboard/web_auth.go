@@ -4,13 +4,17 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"html/template"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
 const webSessionLifetime = 12 * time.Hour
+const webSessionsFile = "admin-sessions.json"
 
 var loginTemplate = template.Must(template.ParseFS(assets, "web/admin-login.html"))
 
@@ -26,6 +30,69 @@ func sessionHash(value string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func webSessionsPath(root string) string { return filepath.Join(root, webSessionsFile) }
+
+// loadWebSessions restores the opaque browser session index from the
+// persistent data directory. Invalid or expired entries are discarded so a
+// damaged optional auth cache cannot prevent the service from starting.
+func loadWebSessions(root string) map[string]time.Time {
+	sessions := make(map[string]time.Time)
+	data, err := os.ReadFile(webSessionsPath(root))
+	if err != nil || len(data) == 0 || len(data) > 128<<10 {
+		return sessions
+	}
+	var stored map[string]time.Time
+	if json.Unmarshal(data, &stored) != nil {
+		return sessions
+	}
+	now := time.Now()
+	for hash, expires := range stored {
+		if len(hash) != sha256.Size*2 || expires.IsZero() || !now.Before(expires) {
+			continue
+		}
+		if _, err := hex.DecodeString(hash); err != nil {
+			continue
+		}
+		sessions[hash] = expires
+	}
+	return sessions
+}
+
+func saveWebSessions(root string, sessions map[string]time.Time) error {
+	if sessions == nil {
+		sessions = map[string]time.Time{}
+	}
+	data, err := json.MarshalIndent(sessions, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(root, 0700); err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(root, ".admin-sessions-*.tmp")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0600); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, webSessionsPath(root))
+}
+
 func (s *Server) webAuthorized(r *http.Request) bool {
 	cookie, err := r.Cookie(s.sessionCookieName())
 	if err != nil || len(cookie.Value) != 64 {
@@ -37,6 +104,7 @@ func (s *Server) webAuthorized(r *http.Request) bool {
 	expires, ok := s.webSessions[key]
 	if !ok || !time.Now().Before(expires) {
 		delete(s.webSessions, key)
+		_ = saveWebSessions(s.config.Dir, s.webSessions)
 		return false
 	}
 	return true
@@ -139,6 +207,12 @@ func (s *Server) serveWebAuth(w http.ResponseWriter, r *http.Request) bool {
 		}
 		value, expires := hex.EncodeToString(key), now.Add(webSessionLifetime)
 		s.webSessions[sessionHash(value)] = expires
+		if err := saveWebSessions(s.config.Dir, s.webSessions); err != nil {
+			delete(s.webSessions, sessionHash(value))
+			s.authMu.Unlock()
+			s.renderLogin(w, http.StatusServiceUnavailable, username, "暂时无法保存登录状态，请稍后重试。")
+			return true
+		}
 		s.loginFailures = 0
 		s.authMu.Unlock()
 		http.SetCookie(w, &http.Cookie{Name: s.sessionCookieName(), Value: value, Path: "/", HttpOnly: true,
@@ -158,6 +232,7 @@ func (s *Server) serveWebAuth(w http.ResponseWriter, r *http.Request) bool {
 		if cookie, err := r.Cookie(s.sessionCookieName()); err == nil {
 			s.authMu.Lock()
 			delete(s.webSessions, sessionHash(cookie.Value))
+			_ = saveWebSessions(s.config.Dir, s.webSessions)
 			s.authMu.Unlock()
 		}
 		http.SetCookie(w, &http.Cookie{Name: s.sessionCookieName(), Path: "/", MaxAge: -1, HttpOnly: true,
