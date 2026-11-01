@@ -28,7 +28,11 @@ def main():
     ap.add_argument("--validation-out", type=Path, required=True)
     ap.add_argument("--synthetic-missing-board-fields", action="store_true")
     ap.add_argument("--transport", type=Path, help="compiled nacexchange with GSA's verified Apple TLS transport")
+    ap.add_argument("--emulation-timeout-seconds", type=int, default=60,
+                    help="bounded time per emulated call (10-300 seconds; ARM/QEMU can need 180)")
     args = ap.parse_args()
+    if not 10 <= args.emulation_timeout_seconds <= 300:
+        ap.error("emulation timeout must be between 10 and 300 seconds")
     profile, runtime, dll, output = [p.resolve() for p in (args.profile, args.runtime, args.encrypt_dll, args.validation_out)]
     roots_source = (Path(__file__).resolve().parents[1] / "gsa" / "apple_root_ca.go").read_text()
     apple_root = re.search(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", roots_source, re.S).group()
@@ -102,7 +106,7 @@ def main():
     emu_start = j.uc.emu_start
 
     def bounded_start(begin, until, *unused, **kwargs):
-        emu_start(begin, until, timeout=60_000_000, count=500_000_000)
+        emu_start(begin, until, timeout=args.emulation_timeout_seconds * 1_000_000, count=500_000_000)
         if j.uc.reg_read(UC_X86_REG_RIP) != until:
             print(json.dumps({"stage": "emulation-budget", "instruction": hex(j.uc.reg_read(UC_X86_REG_RIP))}), flush=True)
             raise RuntimeError("NAC emulation did not return within its budget")

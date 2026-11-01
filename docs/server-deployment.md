@@ -50,7 +50,9 @@ docker compose down
 
 Apple 在密码认证阶段返回 `au=repair` 时，后台会在允许请求新验证码的短信/设备验证码登录模式下，使用同账号、同设备的新认证头读取 `/auth`。只有 Apple 明确返回 HSA2 账号、`authenticationType=hsa2`、`mode=sms`、六位码及有效的当前手机号 ID，才进入短信验证；HTTP 201 已自动发码时不会再次发现手机号或重复发码。没有受信任设备的账号也能由此完成短信验证。验证码验证后仍须 Apple 签发 PET，并独立完成 iCloud 认证，才算登录成功。
 
-WebUI 的原生 repair 短信验证完成后，后台保存 GSA 会话并进入 `awaiting_icloud_activation`，将短期 PET 直接交给现有的账号条款/NAC 激活流程，不先尝试旧版 iosbuddy delegate。激活助手使用 `-accept-terms -terms-only` 仅提交条款并检查 Apple 确认；设备 NAC 就绪后才进行一次 v2 delegate 和配额验收。条款查询返回 HTTP 401 时明确提示当前凭据已被拒绝，不将其报告为待接受条款。
+WebUI 的原生 repair 短信验证完成后，后台保存 GSA 会话并进入 `awaiting_icloud_activation`，将短期 PET 直接交给现有的账号条款/NAC 激活流程，不先尝试旧版 iosbuddy delegate。激活助手使用 `-accept-terms -terms-only` 仅提交条款并检查 Apple 确认；设备 NAC 就绪后才进行一次 v2 delegate 和配额验收。条款查询返回 HTTP 401 时只报告查询被拒绝，不将其报告为待接受条款。
+
+开通状态查询的 HTTP 401 本身不证明账号有待接受条款。自动连接可继续尝试一次同身份的 Mac v2/NAC 验证，此时不提交条款、不附加 `termsAccepted`；iCloud delegate 和实时配额均成功后才安装验收会话。单独的 `activation-plan` 仍返回查询错误。Linux ARM/QEMU 的 NAC 单次模拟预算为 180 秒，整个激活最多运行 5 分钟；其他平台保留 60 秒默认预算，指令数量上限不变。
 
 “使用已有短信验证码”和 Circle 登录不会自动探测此分支，避免探测请求触发新短信。其他尚未识别的 repair 仍显示“客户端认证流程尚未完成”，保留账号独立身份和诊断检查点后停止；Apple 明确返回限流或锁定时停止发码。不能仅凭 `repair` 断定密码错误、账号异常或需要接受条款。`account.apple.com` 能正常登录，也不能证明原生认证步骤已完成。
 

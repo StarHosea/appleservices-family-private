@@ -18,6 +18,8 @@ import (
 	"github.com/Laky-64/appleservices/internal/platform"
 )
 
+var errActivationSetupUnauthorized = errors.New("Apple 拒绝了开通状态查询（HTTP 401）；尚未确认条款状态")
+
 func verifiedGSACheckpointReady(dir, appleID string) bool {
 	data, err := os.ReadFile(filepath.Join(dir, "session.json"))
 	if err != nil || len(data) > 2<<20 {
@@ -74,6 +76,7 @@ func filteredActivationEnv(appleID string) []string {
 		case strings.EqualFold(key, "APPLESERVICES_APPLEID"), strings.EqualFold(key, "APPLESERVICES_PASSWORD"),
 			strings.EqualFold(key, "HTTP_PROXY"), strings.EqualFold(key, "HTTPS_PROXY"), strings.EqualFold(key, "ALL_PROXY"),
 			strings.EqualFold(key, "APPLESERVICES_SOCKS_PROXY"), strings.EqualFold(key, "APPLESERVICES_DELEGATE_DUMP"),
+			strings.EqualFold(key, "APPLESERVICES_TERMS_ACCEPTED"), strings.EqualFold(key, "APPLESERVICES_NAC_VALIDATION_FILE"),
 			strings.EqualFold(key, "APPLESERVICES_DELEGATE_PATH"):
 			continue
 		}
@@ -143,7 +146,7 @@ func (s *Server) activationPlan(ctx context.Context, account *Account, runDir st
 				HTTP int `json:"HTTP"`
 			}
 			if json.Unmarshal([]byte(line), &facts) == nil && facts.HTTP == 401 {
-				return nil, errors.New("Apple 拒绝了当前登录凭据（HTTP 401），请重新连接此账号；尚未确认条款状态")
+				return nil, errActivationSetupUnauthorized
 			}
 		}
 		return nil, errors.New("无法读取 Apple 当前条款状态")
@@ -205,29 +208,33 @@ func (s *Server) activationAction(parent context.Context, account *Account, acce
 		return control.Result{Message: "无法创建私有激活工作区", Stage: "activation-local"}
 	}
 	defer os.RemoveAll(runDir)
-	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 	defer cancel()
 	plan, err := s.activationPlan(ctx, account, runDir)
-	if err != nil {
+	if err != nil && !(accept && approvedTuple == "" && errors.Is(err, errActivationSetupUnauthorized)) {
 		return control.Result{Message: err.Error(), Stage: "activation-plan"}
 	}
 	if !accept {
 		return control.Result{OK: true, Message: "Apple 要求接受当前 iCloud 与媒体服务条款", Stage: "activation-terms", Activation: plan}
 	}
-	// Automatic connection is an explicit dashboard operation covered by the
-	// owner's standing terms consent. Bind acceptance to Apple's current plan.
-	if approvedTuple == "" {
-		approvedTuple = activationTuple(plan)
-	}
-	if approvedTuple == "" || approvedTuple != activationTuple(plan) {
-		return control.Result{Message: "Apple 条款版本已变化，请重新查看并确认", Stage: "activation-consent", Activation: plan}
-	}
 	helper := filepath.Join(filepath.Dir(s.config.Worker), platform.Executable("accountsetupcheck"))
-	termsDump := filepath.Join(runDir, "terms.html")
-	_, _ = runActivationCommand(ctx, root, account.AppleID, helper,
-		"-dir", account.Dir, "-resume", filepath.Join(account.Dir, "session.json"), "-accept-terms", "-terms-only", "-expected-terms", approvedTuple, "-dump", termsDump)
-	if !readTermsReceipt(termsDump + ".update.json") {
-		return control.Result{Message: "Apple 未确认条款接受状态", Stage: "activation-terms", Activation: plan}
+	termsAccepted := false
+	if plan != nil {
+		// Automatic connection is an explicit dashboard operation covered by the
+		// owner's standing terms consent. Bind acceptance to Apple's current plan.
+		if approvedTuple == "" {
+			approvedTuple = activationTuple(plan)
+		}
+		if approvedTuple == "" || approvedTuple != activationTuple(plan) {
+			return control.Result{Message: "Apple 条款版本已变化，请重新查看并确认", Stage: "activation-consent", Activation: plan}
+		}
+		termsDump := filepath.Join(runDir, "terms.html")
+		_, _ = runActivationCommand(ctx, root, account.AppleID, helper,
+			"-dir", account.Dir, "-resume", filepath.Join(account.Dir, "session.json"), "-accept-terms", "-terms-only", "-expected-terms", approvedTuple, "-dump", termsDump)
+		if !readTermsReceipt(termsDump + ".update.json") {
+			return control.Result{Message: "Apple 未确认条款接受状态", Stage: "activation-terms", Activation: plan}
+		}
+		termsAccepted = true
 	}
 	runtimeSource := filepath.Join(root, ".cache", "mac-nac-runtime")
 	runtimeCopy := filepath.Join(runDir, "nac-runtime")
@@ -239,18 +246,31 @@ func (s *Server) activationAction(parent context.Context, account *Account, acce
 	if runtime.GOOS == "linux" {
 		encryptLibrary = filepath.Join(root, ".cache", "activation-source-review", "mac-io-encrypt.so")
 	}
+	emulationSeconds := "60"
+	if runtime.GOOS == "linux" {
+		emulationSeconds = "180"
+	}
 	nacOutput, nacErr := runActivationCommand(ctx, root, account.AppleID, s.config.Python,
 		filepath.Join(root, "tools", "mac-nac-check.py"), "--profile", filepath.Join(account.Dir, "native-adi", "hw_info.plist"),
 		"--runtime", runtimeCopy, "--encrypt-dll", encryptLibrary,
-		"--validation-out", validation, "--synthetic-missing-board-fields", "--transport", filepath.Join(filepath.Dir(s.config.Worker), platform.Executable("nacexchange")))
+		"--validation-out", validation, "--synthetic-missing-board-fields", "--emulation-timeout-seconds", emulationSeconds,
+		"--transport", filepath.Join(filepath.Dir(s.config.Worker), platform.Executable("nacexchange")))
 	if nacErr != nil || !strings.Contains(string(nacOutput), `"stage": "NACSign"`) {
 		return control.Result{Message: "Mac NAC 生成未完成", Stage: "activation-nac"}
 	}
 	checkpoint := filepath.Join(runDir, "icloud-accepted.json")
-	delegateOutput, delegateErr := runActivationCommand(ctx, root, account.AppleID, helper,
-		"-dir", account.Dir, "-resume", filepath.Join(account.Dir, "session.json"), "-delegate-only", "-terms-accepted",
-		"-nac-validation", validation, "-dump", filepath.Join(runDir, "delegate.plist"), "-icloud-checkpoint", checkpoint)
+	// A 401 from the optional setup UI is not a terms plan. Make one Mac v2
+	// exchange with NAC and no consent cookie, letting Apple enforce eligibility.
+	delegateArgs := []string{"-dir", account.Dir, "-resume", filepath.Join(account.Dir, "session.json"), "-delegate-only",
+		"-nac-validation", validation, "-dump", filepath.Join(runDir, "delegate.plist"), "-icloud-checkpoint", checkpoint}
+	if termsAccepted {
+		delegateArgs = append(delegateArgs, "-terms-accepted")
+	}
+	delegateOutput, delegateErr := runActivationCommand(ctx, root, account.AppleID, helper, delegateArgs...)
 	if delegateErr != nil || !strings.Contains(string(delegateOutput), "delegate accepted; mme-token-present=true") || !strings.Contains(string(delegateOutput), "quota accepted;") {
+		if strings.Contains(string(delegateOutput), "(HTTP 401)") {
+			return control.Result{Message: "Apple 拒绝了 iCloud 登录凭据（HTTP 401），本次未完成连接", Stage: "activation-delegate"}
+		}
 		return control.Result{Message: "Apple 尚未接受 Mac v2/NAC 激活", Stage: "activation-delegate"}
 	}
 	destination := filepath.Join(account.Dir, "icloud-accepted.json")
@@ -262,7 +282,11 @@ func (s *Server) activationAction(parent context.Context, account *Account, acce
 		return result
 	}
 	result.Stage = "activation-completed"
-	result.Message = "iCloud 条款、Mac NAC、delegate 与配额验收均已完成"
-	result.Activation = &control.ActivationInfo{Completed: true, Region: plan.Region, ICloudVersion: plan.ICloudVersion, MediaVersion: plan.MediaVersion, ICloudTermsURL: plan.ICloudTermsURL, MediaTermsURL: plan.MediaTermsURL}
+	result.Message = "iCloud 会话与配额验收已完成"
+	result.Activation = &control.ActivationInfo{Completed: true}
+	if plan != nil {
+		result.Activation.Region, result.Activation.ICloudVersion, result.Activation.MediaVersion = plan.Region, plan.ICloudVersion, plan.MediaVersion
+		result.Activation.ICloudTermsURL, result.Activation.MediaTermsURL = plan.ICloudTermsURL, plan.MediaTermsURL
+	}
 	return result
 }

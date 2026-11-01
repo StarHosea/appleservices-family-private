@@ -6,11 +6,81 @@ import (
 	"github.com/Laky-64/appleservices/internal/control"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	appleservices "github.com/Laky-64/appleservices"
 )
+
+func TestSetup401ConnectionMakesOneNACDelegateWithoutAcceptingTerms(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses POSIX executables")
+	}
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	account := &Account{ID: "test", AppleID: "owner@example.test", Dir: filepath.Join(root, "account")}
+	for _, dir := range []string{bin, account.Dir, filepath.Join(root, ".cache", "mac-nac-runtime")} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, _ := json.Marshal(appleservices.Session{AppleID: account.AppleID, DSID: "test-account", Tokens: map[string]string{"com.apple.gs.idms.pet": "test-pet"}})
+	if err := os.WriteFile(filepath.Join(account.Dir, "session.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// The setup UI refuses access. No terms are available to approve. The
+	// connection may still make one normal v2/NAC exchange, with no consent flag.
+	helper := `#!/bin/sh
+delegate=0
+for arg in "$@"; do
+  case "$arg" in
+    -delegate-only) delegate=1 ;;
+    -terms-accepted|-accept-terms) exit 99 ;;
+  esac
+done
+if [ "$delegate" = 0 ]; then
+  printf '{"HTTP":401}\n'
+  exit 1
+fi
+printf 'delegate\n' >> "$0.calls"
+printf 'icloud: /setup/signin/v2/login refused (HTTP 401) ErrorID=UNAUTHORIZED\n'
+exit 1
+`
+	nac := `#!/bin/sh
+printf '%s\n' "$@" > "$0.args"
+printf '{"stage": "NACSign"}\n'
+`
+	for path, source := range map[string]string{filepath.Join(bin, "accountsetupcheck"): helper, filepath.Join(bin, "nacstub"): nac} {
+		if err := os.WriteFile(path, []byte(source), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := &Server{config: Config{Worker: filepath.Join(bin, "worker"), Python: filepath.Join(bin, "nacstub"), MacPushSetup: filepath.Join(root, "tools", "mac-push-check.py")}}
+	result := server.activationAction(context.Background(), account, true, "")
+	if result.OK || result.Stage != "activation-delegate" || !strings.Contains(result.Message, "HTTP 401") || acceptedCheckpointReady(account.Dir, account.AppleID) {
+		t.Fatalf("unaccepted delegate was treated as success: %#v", result)
+	}
+	calls, err := os.ReadFile(filepath.Join(bin, "accountsetupcheck.calls"))
+	if err != nil || string(calls) != "delegate\n" {
+		t.Fatal("connection retried a refused delegate or failed to reach NAC", err)
+	}
+	args, err := os.ReadFile(filepath.Join(bin, "nacstub.args"))
+	if err != nil || !strings.Contains(string(args), "--emulation-timeout-seconds\n") || runtime.GOOS == "linux" && !strings.Contains(string(args), "\n180\n") {
+		t.Fatal("NAC did not receive the platform's bounded emulation budget", err)
+	}
+}
+
+func TestActivationEnvironmentDoesNotInheritUnverifiedConsentOrNAC(t *testing.T) {
+	t.Setenv("APPLESERVICES_TERMS_ACCEPTED", "1")
+	t.Setenv("APPLESERVICES_NAC_VALIDATION_FILE", "other-account-validation")
+	for _, entry := range filteredActivationEnv("owner@example.test") {
+		if strings.HasPrefix(entry, "APPLESERVICES_TERMS_ACCEPTED=") || strings.HasPrefix(entry, "APPLESERVICES_NAC_VALIDATION_FILE=") {
+			t.Fatal("activation inherited consent or validation from another operation")
+		}
+	}
+}
 
 func TestParseActivationPlanReturnsOnlySafeTermsMetadata(t *testing.T) {
 	output := []byte("diagnostic\n" + `{"terms-plan":true,"region":"US","icloud-version":"630101","media-version":"290571"}` + "\n")
