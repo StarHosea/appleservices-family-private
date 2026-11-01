@@ -30,10 +30,14 @@ FROM debian:bookworm-slim AS server
 ARG APT_MIRROR=https://deb.debian.org
 COPY --from=adi /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 RUN sed -i "s|http://deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
-    && apt-get update && apt-get install -y --no-install-recommends ca-certificates qemu-user-static \
+    && apt-get update && apt-get install -y --no-install-recommends ca-certificates qemu-user-static python3 python3-venv \
     && rm -rf /var/lib/apt/lists/* \
     && find /usr/bin -name 'qemu-*-static' ! -name qemu-x86_64-static -delete \
     && groupadd -g 10001 appleservices && useradd -u 10001 -g 10001 -M -s /usr/sbin/nologin appleservices
+COPY deploy/nac-requirements.txt /tmp/nac-requirements.txt
+RUN python3 -m venv /opt/nac-runtime \
+    && /opt/nac-runtime/bin/python -m pip install --no-cache-dir -r /tmp/nac-requirements.txt \
+    && rm /tmp/nac-requirements.txt
 WORKDIR /app
 COPY --from=adi /usr/local /opt/adi-runtime/usr/local
 COPY --from=adi /usr/lib/x86_64-linux-gnu /opt/adi-runtime/usr/lib/x86_64-linux-gnu
@@ -49,6 +53,7 @@ ENV APPLESERVICES_DIR=/data \
     APPLESERVICES_LISTEN=0.0.0.0:18741 \
     APPLESERVICES_ADI_LIBRARY=/app/.cache/openbubbles-linux/librust_lib_bluebubbles.so \
     APPLESERVICES_ADI_FENCE=/app/.cache/transport_fence.so \
+    APPLESERVICES_NAC_PYTHON=/opt/nac-runtime/bin/python \
     XDG_CACHE_HOME=/data/cache \
     PYTHONDONTWRITEBYTECODE=1
 USER 10001:10001

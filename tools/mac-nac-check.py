@@ -25,6 +25,8 @@ def main():
     ap.add_argument("--profile", type=Path, required=True)
     ap.add_argument("--runtime", type=Path, required=True)
     ap.add_argument("--encrypt-dll", type=Path, required=True)
+    ap.add_argument("--encrypt-python",
+                    help="isolated x86 Python for the property library; NAC itself stays native")
     ap.add_argument("--validation-out", type=Path, required=True)
     ap.add_argument("--synthetic-missing-board-fields", action="store_true")
     ap.add_argument("--transport", type=Path, help="compiled nacexchange with GSA's verified Apple TLS transport")
@@ -58,25 +60,43 @@ def main():
         synthetic = True
     if len(hw["rom"]) != 6 or not hw["mlb"]:
         raise SystemExit("Invalid ROM/MLB input lengths")
-    if sys.platform == "win32":
-        ctypes.windll.kernel32.SetErrorMode(0x8003)
-    lib = ctypes.CDLL(str(dll))
-    encrypt = lib.mac_io_encrypt
-    encrypt.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_void_p]
-    encrypt.restype = None
+    if args.encrypt_python:
+        # Only the small extracted property routine requires x86. Running
+        # Unicorn under an x86 Python emulator on ARM adds a second CPU emulator.
+        # Pass hardware through private pipes, never command arguments or logs.
+        encryption_env = {key: value for key, value in os.environ.items()
+                          if key.upper() not in ("APPLESERVICES_APPLEID", "APPLESERVICES_PASSWORD")}
+        result = subprocess.run([args.encrypt_python, str(Path(__file__).with_name("mac-nac-encrypt.py")),
+                                 "--library", str(dll)], input=plistlib.dumps(hw), capture_output=True,
+                                timeout=30, env=encryption_env)
+        if result.returncode or len(result.stdout) > 65536:
+            raise RuntimeError("property encryption helper failed")
+        encrypted = plistlib.loads(result.stdout)
+        for name in ("platform_serial_number", "platform_uuid", "root_disk_uuid", "rom", "mlb"):
+            value = encrypted.get(name + "_enc")
+            if not isinstance(value, bytes) or len(value) != 17:
+                raise RuntimeError("invalid encrypted property")
+            hw[name + "_enc"] = value
+    else:
+        if sys.platform == "win32":
+            ctypes.windll.kernel32.SetErrorMode(0x8003)
+        lib = ctypes.CDLL(str(dll))
+        encrypt = lib.mac_io_encrypt
+        encrypt.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_void_p]
+        encrypt.restype = None
 
-    def enc(data):
-        data = bytes(data)
-        src, dst = ctypes.create_string_buffer(data), ctypes.create_string_buffer(17)
-        encrypt(src, len(data), dst)
-        return dst.raw
+        def enc(data):
+            data = bytes(data)
+            src, dst = ctypes.create_string_buffer(data), ctypes.create_string_buffer(17)
+            encrypt(src, len(data), dst)
+            return dst.raw
 
-    for name, raw in [("platform_serial_number", hw["platform_serial_number"].encode()),
-                      ("platform_uuid", uuid.UUID(hw["platform_uuid"]).bytes),
-                      ("root_disk_uuid", uuid.UUID(hw["root_disk_uuid"]).bytes),
-                      ("rom", hw["rom"]), ("mlb", hw["mlb"].encode())]:
-        if not hw[name + "_enc"]:
-            hw[name + "_enc"] = enc(raw)
+        for name, raw in [("platform_serial_number", hw["platform_serial_number"].encode()),
+                          ("platform_uuid", uuid.UUID(hw["platform_uuid"]).bytes),
+                          ("root_disk_uuid", uuid.UUID(hw["root_disk_uuid"]).bytes),
+                          ("rom", hw["rom"]), ("mlb", hw["mlb"].encode())]:
+            if not hw[name + "_enc"]:
+                hw[name + "_enc"] = enc(raw)
     mapping = {"Gq3489ugfi": hw["platform_serial_number_enc"], "Fyp98tpgj": hw["platform_uuid_enc"],
                "kbjfrfpoJU": hw["root_disk_uuid_enc"], "abKPld1EcMni": hw["mlb_enc"], "oycqAZloTNDm": hw["rom_enc"],
                "IOMACAddress": bytes(hw["io_mac_address"]), "IOPlatformSerialNumber": hw["platform_serial_number"],

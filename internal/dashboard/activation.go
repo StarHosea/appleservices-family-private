@@ -250,11 +250,23 @@ func (s *Server) activationAction(parent context.Context, account *Account, acce
 	if runtime.GOOS == "linux" {
 		emulationSeconds = "180"
 	}
-	nacOutput, nacErr := runActivationCommand(ctx, root, account.AppleID, s.config.Python,
+	nacPython := strings.TrimSpace(os.Getenv("APPLESERVICES_NAC_PYTHON"))
+	if nacPython == "" {
+		nacPython = s.config.Python
+	} else {
+		// Native ADI and the property routine remain in their x86 runtime.
+		// Unicorn runs on the host CPU so ARM avoids nested CPU emulation.
+		emulationSeconds = "60"
+	}
+	nacArgs := []string{
 		filepath.Join(root, "tools", "mac-nac-check.py"), "--profile", filepath.Join(account.Dir, "native-adi", "hw_info.plist"),
 		"--runtime", runtimeCopy, "--encrypt-dll", encryptLibrary,
 		"--validation-out", validation, "--synthetic-missing-board-fields", "--emulation-timeout-seconds", emulationSeconds,
-		"--transport", filepath.Join(filepath.Dir(s.config.Worker), platform.Executable("nacexchange")))
+		"--transport", filepath.Join(filepath.Dir(s.config.Worker), platform.Executable("nacexchange"))}
+	if nacPython != s.config.Python {
+		nacArgs = append(nacArgs, "--encrypt-python", s.config.Python)
+	}
+	nacOutput, nacErr := runActivationCommand(ctx, root, account.AppleID, nacPython, nacArgs...)
 	if nacErr != nil || !strings.Contains(string(nacOutput), `"stage": "NACSign"`) {
 		return control.Result{Message: "Mac NAC 生成未完成", Stage: "activation-nac"}
 	}

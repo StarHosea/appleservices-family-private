@@ -15,9 +15,16 @@ import (
 )
 
 func TestSetup401ConnectionMakesOneNACDelegateWithoutAcceptingTerms(t *testing.T) {
+	t.Run("legacy-python", func(t *testing.T) { testSetup401Connection(t, false) })
+	t.Run("native-python", func(t *testing.T) { testSetup401Connection(t, true) })
+}
+
+func testSetup401Connection(t *testing.T, nativePython bool) {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("fixture uses POSIX executables")
 	}
+	t.Setenv("APPLESERVICES_NAC_PYTHON", "")
 	root := t.TempDir()
 	bin := filepath.Join(root, "bin")
 	account := &Account{ID: "test", AppleID: "owner@example.test", Dir: filepath.Join(root, "account")}
@@ -52,7 +59,12 @@ exit 1
 printf '%s\n' "$@" > "$0.args"
 printf '{"stage": "NACSign"}\n'
 `
-	for path, source := range map[string]string{filepath.Join(bin, "accountsetupcheck"): helper, filepath.Join(bin, "nacstub"): nac} {
+	nacProgram := filepath.Join(bin, "nacstub")
+	if nativePython {
+		nacProgram = filepath.Join(bin, "native-nacstub")
+		t.Setenv("APPLESERVICES_NAC_PYTHON", nacProgram)
+	}
+	for path, source := range map[string]string{filepath.Join(bin, "accountsetupcheck"): helper, nacProgram: nac} {
 		if err := os.WriteFile(path, []byte(source), 0700); err != nil {
 			t.Fatal(err)
 		}
@@ -66,9 +78,16 @@ printf '{"stage": "NACSign"}\n'
 	if err != nil || string(calls) != "delegate\n" {
 		t.Fatal("connection retried a refused delegate or failed to reach NAC", err)
 	}
-	args, err := os.ReadFile(filepath.Join(bin, "nacstub.args"))
-	if err != nil || !strings.Contains(string(args), "--emulation-timeout-seconds\n") || runtime.GOOS == "linux" && !strings.Contains(string(args), "\n180\n") {
+	args, err := os.ReadFile(nacProgram + ".args")
+	budget := "60"
+	if runtime.GOOS == "linux" && !nativePython {
+		budget = "180"
+	}
+	if err != nil || !strings.Contains(string(args), "--emulation-timeout-seconds\n"+budget+"\n") {
 		t.Fatal("NAC did not receive the platform's bounded emulation budget", err)
+	}
+	if nativePython != strings.Contains(string(args), "--encrypt-python\n"+filepath.Join(bin, "nacstub")+"\n") {
+		t.Fatal("native NAC did not isolate the property routine in the original Python runtime")
 	}
 }
 

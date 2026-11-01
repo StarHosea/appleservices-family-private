@@ -138,7 +138,7 @@ function renderLogin(view){
 function scheduleAutoRefresh(view,activated){
   if(busy||autoRefreshScheduled||(isLoginPage()&&!loginStartedAccount))return;
   if(!activated){
-    const key=selectedAccount+'|activation|'+(view.status?.pid||'saved')+'|'+(view.status?.last_refresh_at||view.status?.state||'saved');
+    const key=selectedAccount+'|activation|'+(view.status?.pid||'saved')+'|'+((view.status?.running?view.status?.last_refresh_at:view.status?.updated_at)||view.status?.state||'saved');
     if(view.activation_ready&&!view.launching&&(!view.status?.running||view.status?.authenticated)&&!activationAttempts.has(key)&&!autoRefreshAttempted(key)&&acquireAutoRefreshLease(selectedAccount)){
       activationAttempts.add(key);markAutoRefreshAttempt(key);autoRefreshScheduled=true;
       const account=selectedAccount;
