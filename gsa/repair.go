@@ -38,18 +38,35 @@ type RepairSMSChallenge struct {
 // repair marker, phone presence, or HTTP success alone never establish 2FA.
 func isRepairSMSChallenge(body []byte) bool {
 	var challenge struct {
-		AuthenticationType string `json:"authenticationType"`
-		Mode               string `json:"mode"`
-		HSA2               bool   `json:"hsa2Account"`
-		SecurityCode       struct {
+		AuthenticationType    string  `json:"authenticationType"`
+		Mode                  *string `json:"mode"`
+		HSA2                  bool    `json:"hsa2Account"`
+		HideSendSMSCodeOption *bool   `json:"hideSendSMSCodeOption"`
+		TrustedPhoneNumber    struct {
+			ID       int    `json:"id"`
+			PushMode string `json:"pushMode"`
+		} `json:"trustedPhoneNumber"`
+		SecurityCode struct {
 			Length           int  `json:"length"`
 			Locked           bool `json:"securityCodeLocked"`
 			TooManySent      bool `json:"tooManyCodesSent"`
 			TooManyValidated bool `json:"tooManyCodesValidated"`
 		} `json:"securityCode"`
 	}
-	return json.Unmarshal(body, &challenge) == nil && challenge.AuthenticationType == "hsa2" && challenge.HSA2 && challenge.Mode == "sms" &&
-		challenge.SecurityCode.Length == 6 && !challenge.SecurityCode.Locked && !challenge.SecurityCode.TooManySent && !challenge.SecurityCode.TooManyValidated
+	if json.Unmarshal(body, &challenge) != nil || challenge.AuthenticationType != "hsa2" || !challenge.HSA2 ||
+		challenge.SecurityCode.Length != 6 || challenge.SecurityCode.Locked || challenge.SecurityCode.TooManySent || challenge.SecurityCode.TooManyValidated ||
+		(challenge.HideSendSMSCodeOption != nil && *challenge.HideSendSMSCodeOption) {
+		return false
+	}
+	if challenge.Mode != nil {
+		return *challenge.Mode == "sms"
+	}
+	// /auth can advertise SMS on the selected trusted phone instead of a
+	// top-level mode. Require that explicit offer and the same phone that will
+	// receive the request; a phone list or successful HTTP response is insufficient.
+	id, err := parseTrustedPhoneID(body)
+	return err == nil && id == challenge.TrustedPhoneNumber.ID && challenge.TrustedPhoneNumber.PushMode == "sms" &&
+		challenge.HideSendSMSCodeOption != nil && !*challenge.HideSendSMSCodeOption
 }
 
 func (c *Client) continueRepairSMS(payload map[string]any) (*LoginResult, error) {

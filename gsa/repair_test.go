@@ -15,6 +15,59 @@ import (
 
 const repairSMSMetadata = `{"authenticationType":"hsa2","hsa2Account":true,"mode":"sms","securityCode":{"length":6},"trustedPhoneNumber":{"id":7},"trustedPhoneNumbers":[{"id":1}]}`
 
+const repairSMSPushMetadata = `{"authenticationType":"hsa2","hsa2Account":true,"securityCode":{"length":6,"securityCodeLocked":false,"tooManyCodesSent":false,"tooManyCodesValidated":false},"trustedPhoneNumber":{"id":7,"pushMode":"sms"},"trustedPhoneNumbers":[{"id":1,"pushMode":"voice"},{"id":7,"pushMode":"sms"}],"hideSendSMSCodeOption":false}`
+
+func TestRepairSMSSelectedPhoneOffer(t *testing.T) {
+	if !isRepairSMSChallenge([]byte(repairSMSPushMetadata)) {
+		t.Fatal("selected phone SMS offer without top-level mode was rejected")
+	}
+	for _, body := range []string{
+		strings.Replace(repairSMSPushMetadata, `"hideSendSMSCodeOption":false`, `"hideSendSMSCodeOption":true`, 1),
+		strings.Replace(repairSMSPushMetadata, `,"hideSendSMSCodeOption":false`, ``, 1),
+		strings.Replace(repairSMSPushMetadata, `"pushMode":"sms"`, `"pushMode":"voice"`, 1),
+		strings.Replace(repairSMSPushMetadata, `"id":7`, `"id":0`, 1),
+		strings.Replace(repairSMSPushMetadata, `"length":6`, `"length":4`, 1),
+		strings.Replace(repairSMSPushMetadata, `"tooManyCodesSent":false`, `"tooManyCodesSent":true`, 1),
+		strings.Replace(repairSMSPushMetadata, `"securityCodeLocked":false`, `"securityCodeLocked":true`, 1),
+		strings.Replace(repairSMSPushMetadata, `"hsa2Account":true`, `"hsa2Account":false`, 1),
+		strings.Replace(repairSMSPushMetadata, `"authenticationType":"hsa2"`, `"authenticationType":"hsa2","mode":"voice"`, 1),
+		strings.Replace(repairSMSPushMetadata, `"authenticationType":"hsa2"`, `"authenticationType":"hsa2","direct":{"phoneNumberVerification":{"trustedPhoneNumber":{"id":1}}}`, 1),
+	} {
+		if isRepairSMSChallenge([]byte(body)) {
+			t.Fatal("accepted a blocked, unsupported or differently selected phone offer")
+		}
+	}
+}
+
+func TestRepairSelectedPhoneOfferRequestsSMSBeforeVerification(t *testing.T) {
+	c := NewClient(headerProvider{})
+	requests := 0
+	c.transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		if requests == 1 {
+			if r.Method != http.MethodGet || r.URL.Path != "/auth" {
+				t.Fatal("did not discover the current challenge")
+			}
+			return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(repairSMSPushMetadata))}, nil
+		}
+		if requests != 2 || r.Method != http.MethodPut || r.URL.Path != "/auth/verify/phone" {
+			t.Fatal("unexpected request instead of sending SMS once")
+		}
+		var body smsRequestBody
+		if json.NewDecoder(r.Body).Decode(&body) != nil || body.PhoneNumber.ID != 7 || body.Mode != "sms" {
+			t.Fatal("SMS did not use the selected phone and advertised mode")
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+	})
+	result, err := c.continueRepairSMS(map[string]any{"adsid": "test-account", "GsIdmsToken": "test-identity"})
+	if err != nil || result == nil || !result.NeedsTwoFactor || !result.RequiresSMS || requests != 1 {
+		t.Fatal("discovery did not preserve the unverified SMS challenge", err)
+	}
+	if err := c.RequestSMSCode("test-account", "test-identity"); err != nil || requests != 2 || c.VerifiedLoginResult() != nil {
+		t.Fatal("SMS request failed or completed authentication without a code and PET", err)
+	}
+}
+
 func TestRepairSMSRequiresExplicitChallenge(t *testing.T) {
 	for _, body := range []string{`{}`, `{"trustedPhoneNumbers":[{"id":7}]}`, `{"termsUpdateNeeded":true}`, strings.Replace(repairSMSMetadata, `"hsa2Account":true`, `"hsa2Account":false`, 1), strings.Replace(repairSMSMetadata, `"mode":"sms"`, `"mode":"voice"`, 1), strings.Replace(repairSMSMetadata, `"length":6`, `"length":6,"securityCodeLocked":true`, 1)} {
 		if isRepairSMSChallenge([]byte(body)) {

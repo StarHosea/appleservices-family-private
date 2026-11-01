@@ -51,7 +51,7 @@ docker compose down
 
 ## 首次登录返回 repair 后续步骤
 
-Apple 在密码认证阶段返回 `au=repair` 时，后台会在允许请求新验证码的短信/设备验证码登录模式下，使用同账号、同设备的新认证头读取 `/auth`。只有 Apple 明确返回 HSA2 账号、`authenticationType=hsa2`、`mode=sms`、六位码及有效的当前手机号 ID，才进入短信验证；HTTP 201 已自动发码时不会再次发现手机号或重复发码。没有受信任设备的账号也能由此完成短信验证。验证码验证后仍须 Apple 签发 PET，并独立完成 iCloud 认证，才算登录成功。
+Apple 在密码认证阶段返回 `au=repair` 时，后台会在允许请求新验证码的短信/设备验证码登录模式下，使用同账号、同设备的新认证头读取 `/auth`。只有 Apple 明确返回 HSA2 账号、`authenticationType=hsa2`、六位码及有效的当前手机号 ID，才进入短信验证。短信能力由顶层 `mode=sms` 确认；若没有顶层 mode，则必须由当前选中手机号的 `pushMode=sms` 和 `hideSendSMSCodeOption=false` 共同确认，并核对发码使用同一手机号。短信被隐藏、验证码锁定或限流时停止；HTTP 201 已自动发码时不会再次发现手机号或重复发码。没有受信任设备的账号也能由此完成短信验证。验证码验证后仍须 Apple 签发 PET，并独立完成 iCloud 认证，才算登录成功。
 
 WebUI 的原生 repair 短信验证完成后，后台保存 GSA 会话并进入 `awaiting_icloud_activation`，将短期 PET 直接交给现有的账号条款/NAC 激活流程，不先尝试旧版 iosbuddy delegate。激活助手使用 `-accept-terms -terms-only` 仅提交条款并检查 Apple 确认；设备 NAC 就绪后才进行一次 v2 delegate 和配额验收。条款查询返回 HTTP 401 时只报告查询被拒绝，不将其报告为待接受条款。
 
