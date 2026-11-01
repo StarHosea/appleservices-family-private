@@ -63,6 +63,7 @@ func run() error {
 	dump := flag.String("dump", "", "private output for account setup response")
 	checkpoint := flag.String("checkpoint", "", "private output for fresh GSA session; not iCloud acceptance")
 	accept := flag.Bool("accept-terms", false, "submit the terms update only after the account owner explicitly agrees")
+	termsOnly := flag.Bool("terms-only", false, "stop after terms acknowledgement; do not exchange iCloud delegates")
 	expectedTerms := flag.String("expected-terms", "", "approved region:icloud-version:media-version, required for acceptance")
 	resume := flag.String("resume", "", "reuse a private bound GSA checkpoint without another password request")
 	icloudResume := flag.String("icloud-resume", "", "read quota and optional offers using a bound accepted iCloud checkpoint; no login or delegate exchange")
@@ -94,6 +95,9 @@ func run() error {
 	}
 	if *delegateOnly && *accept {
 		return fmt.Errorf("delegate-only cannot accept terms")
+	}
+	if *termsOnly && (!*accept || *delegateOnly || *devicesOnly || *nativeOnly || *icloudResume != "") {
+		return fmt.Errorf("terms-only requires only the terms acceptance flow")
 	}
 	if *storagePlan && !*delegateOnly && *icloudResume == "" {
 		return fmt.Errorf("storage-plan requires delegate-only or icloud-resume diagnostics")
@@ -593,6 +597,9 @@ func run() error {
 	fmt.Printf("terms-update HTTP=%d; success=%t\n", updated.StatusCode, accepted)
 	if updated.StatusCode != http.StatusOK || !accepted {
 		return fmt.Errorf("terms update refused; iCloud acceptance not established")
+	}
+	if *termsOnly {
+		return nil
 	}
 	headers, err = headersProvider.Headers()
 	if err != nil {

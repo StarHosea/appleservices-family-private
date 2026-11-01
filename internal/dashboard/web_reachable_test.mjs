@@ -9,7 +9,7 @@ const html=readFileSync(new URL('web/index.html',import.meta.url),'utf8');
 // Exercise the shipped event handlers and action dispatcher without contacting
 // Apple. Unrelated startup polling and rendering are outside this fixture.
 function fixture(respond){
-  const elements=new Map(),requests=[];
+  const elements=new Map(),requests=[],storage=new Map(),timers=[];
   function element(id=''){
     const classes=new Set();
     return {id,value:'',hidden:false,disabled:false,readOnly:false,textContent:'',children:[],listeners:{},
@@ -27,16 +27,31 @@ function fixture(respond){
   }
   const context=vm.createContext({
     document:{getElementById:id=>{assert.ok(elements.has(id),`missing DOM id ${id}`);return elements.get(id);},querySelector:()=>({content:'test-token'}),querySelectorAll:()=>[],createElement:()=>element(),body:element()},
-    localStorage:{getItem:()=>'',setItem(){},removeItem(){}},
+    localStorage:{getItem:key=>storage.get(key)||'',setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)},
+    window:{setTimeout:fn=>timers.push(fn)},
     location:{hash:'#overview'},setTimeout:()=>0,clearTimeout(){},
     confirm(){throw new Error('Sending must not depend on a native confirmation dialog');},
     fetch:async(url,options)=>{const request=JSON.parse(options.body);requests.push(request);return {status:200,ok:true,json:async()=>respond(request)};}
   });
   vm.runInContext(source.slice(0,source.indexOf("window.addEventListener('hashchange'")),context);
   vm.runInContext("poll=async()=>{};selectedAccount='test-account';",context);
-  return {context,requests,get:id=>elements.get(id),run:code=>vm.runInContext(code,context)};
+  return {context,requests,timers,get:id=>elements.get(id),run:code=>vm.runInContext(code,context)};
 }
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('a new verified worker can activate after the previous login failed, without retrying the old session',async()=>{
+  const f=fixture(()=>({ok:false,message:'Apple rejected the old session'}));
+  f.run("var view={activation_ready:true,status:{pid:100,last_refresh_at:'0001-01-01T00:00:00Z',state:'awaiting_icloud_activation'}};scheduleAutoRefresh(view,false)");
+  assert.equal(f.timers.length,1);
+  f.timers.shift()();
+  await settle();
+  assert.equal(f.requests.length,1);
+  assert.equal(f.requests[0].action,'activation-connect');
+  f.run('scheduleAutoRefresh(view,false)');
+  assert.equal(f.timers.length,0,'failed credentials were automatically resubmitted');
+  f.run('view.status.pid=101;scheduleAutoRefresh(view,false)');
+  assert.equal(f.timers.length,1,'a previous failure blocked newly verified credentials');
+});
 
 test('send click dispatches once and shows progress, then the code form',async()=>{
   let complete;

@@ -136,6 +136,16 @@ func (s *Server) activationPlan(ctx context.Context, account *Account, runDir st
 	output, err := runActivationCommand(ctx, root, account.AppleID, helper,
 		"-dir", account.Dir, "-resume", filepath.Join(account.Dir, "session.json"), "-dump", dump)
 	if err != nil {
+		// The helper prints safe HTTP metadata before returning a setup error.
+		// Do not mistake rejected credentials for a terms-acceptance request.
+		for _, line := range strings.Split(string(output), "\n") {
+			var facts struct {
+				HTTP int `json:"HTTP"`
+			}
+			if json.Unmarshal([]byte(line), &facts) == nil && facts.HTTP == 401 {
+				return nil, errors.New("Apple 拒绝了当前登录凭据（HTTP 401），请重新连接此账号；尚未确认条款状态")
+			}
+		}
 		return nil, errors.New("无法读取 Apple 当前条款状态")
 	}
 	return parseActivationPlan(output)
@@ -215,7 +225,7 @@ func (s *Server) activationAction(parent context.Context, account *Account, acce
 	helper := filepath.Join(filepath.Dir(s.config.Worker), platform.Executable("accountsetupcheck"))
 	termsDump := filepath.Join(runDir, "terms.html")
 	_, _ = runActivationCommand(ctx, root, account.AppleID, helper,
-		"-dir", account.Dir, "-resume", filepath.Join(account.Dir, "session.json"), "-accept-terms", "-expected-terms", approvedTuple, "-dump", termsDump)
+		"-dir", account.Dir, "-resume", filepath.Join(account.Dir, "session.json"), "-accept-terms", "-terms-only", "-expected-terms", approvedTuple, "-dump", termsDump)
 	if !readTermsReceipt(termsDump + ".update.json") {
 		return control.Result{Message: "Apple 未确认条款接受状态", Stage: "activation-terms", Activation: plan}
 	}

@@ -65,8 +65,8 @@ func (b *fakeBackend) SubmitSMSCode(_, _, _ string) error {
 	b.submits = append(b.submits, SMS)
 	return b.submitErr
 }
-func (b *fakeBackend) Snapshot(dsid string, _ map[string]string) (gsa.Session, error) {
-	return gsa.Session{DSID: dsid, Cookies: map[string][]gsa.CookieKV{
+func (b *fakeBackend) Snapshot(dsid string, tokens map[string]string) (gsa.Session, error) {
+	return gsa.Session{DSID: dsid, Tokens: tokens, Cookies: map[string][]gsa.CookieKV{
 		"https://gsa.apple.com/auth": {{Name: "test-cookie", Value: "test-value"}},
 	}}, nil
 }
@@ -414,6 +414,39 @@ func TestResumeRepairRequiresApplePETAndNeverSubmitsAnEmptyPassword(t *testing.T
 		if _, err = login.Client(); err != nil {
 			t.Fatal("verified challenge did not complete iCloud exchange", err)
 		}
+	}
+}
+
+func TestRepairActivationHandoffKeepsVerifiedPETWithoutDelegateExchange(t *testing.T) {
+	store := &memoryStore{}
+	backend := &pendingRepairBackend{fakeBackend: &fakeBackend{}, issuePET: true}
+	delegates := 0
+	opts := testOptions(backend.fakeBackend, func(map[string]string, string, string, string) (icloud.DelegateTokens, error) {
+		delegates++
+		return icloud.DelegateTokens{}, errors.New("legacy delegate must not be requested")
+	})
+	opts = append(opts, func(o *options) {
+		o.newBackend = func(gsa.AnisetteProvider, *gsa.Session) loginBackend { return backend }
+	})
+	login, err := ResumePendingRepair("owner@example.test", store, &gsa.PendingRepair{}, opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := login.CheckpointForICloudActivation(); err == nil || store.session != nil {
+		t.Fatal("unverified repair was handed to activation")
+	}
+	if err := login.SubmitCode(SMS, "123456"); err != nil {
+		t.Fatal(err)
+	}
+	if err := login.CheckpointForICloudActivation(); err != nil {
+		t.Fatal(err)
+	}
+	if delegates != 0 || backend.calls != 0 || login.client != nil || store.session == nil || store.session.AppleID != "owner@example.test" || store.session.Tokens["com.apple.gs.idms.pet"] != "test-pet" {
+		t.Fatal("repair handoff lost the verified account or exchanged delegates")
+	}
+	login.result.SessionPayload["t"] = map[string]any{}
+	if err := login.CheckpointForICloudActivation(); err == nil {
+		t.Fatal("activation accepted a session without an Apple-issued PET")
 	}
 }
 

@@ -187,7 +187,7 @@ func run() (runErr error) {
 					runErr = errors.Join(runErr, err)
 				}
 			}
-		} else if status.State != "verification_required" {
+		} else if status.State != "verification_required" && (status.State != "awaiting_icloud_activation" || runErr != nil) {
 			if runErr != nil {
 				status.FailureStage, status.State = status.State, "failed"
 			} else {
@@ -328,7 +328,8 @@ func run() (runErr error) {
 	if err != nil {
 		return err
 	}
-	if login.RequiresSMS() && *method != "sms-existing" {
+	repairContinuation := login.RequiresSMS()
+	if repairContinuation && *method != "sms-existing" {
 		*method = "sms"
 	}
 	input := bufio.NewReader(os.Stdin)
@@ -439,6 +440,15 @@ func run() (runErr error) {
 		if err := login.PrepareDeviceRegistration(registration); err != nil {
 			return err
 		}
+	}
+	if repairContinuation && *guiAuth && *useNativeADI {
+		// Repair SMS authenticates the account, not iCloud. Hand the verified
+		// PET to the dashboard's terms/NAC flow before trying a legacy delegate.
+		if err := login.CheckpointForICloudActivation(); err != nil {
+			return err
+		}
+		status.State, status.VerificationRequired = "awaiting_icloud_activation", false
+		return nil
 	}
 	client, err := login.Client()
 	if ctx.Err() != nil {

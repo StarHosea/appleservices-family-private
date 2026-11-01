@@ -366,6 +366,20 @@ func (l *Login) checkpointVerifiedGSA() error {
 	return nil
 }
 
+// CheckpointForICloudActivation saves verified account credentials without
+// exchanging the PET for iCloud delegates. A native repair continuation can
+// hand this session to the terms/NAC activation flow before any delegate call.
+// This is not evidence that iCloud accepted the account.
+func (l *Login) CheckpointForICloudActivation() error {
+	if l.needsTwoFactor || l.result == nil || l.result.SessionPayload == nil {
+		return errors.New("appleservices: verified GSA session is unavailable")
+	}
+	if _, err := icloud.PETFromSPD(l.result.SessionPayload); err != nil {
+		return err
+	}
+	return l.checkpointVerifiedGSA()
+}
+
 // Client is the result of a completed iCloud login. Tokens are sensitive.
 // This login-only client has no data retrieval or modification methods.
 type Client struct {
