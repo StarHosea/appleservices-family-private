@@ -2,9 +2,13 @@ package gsa
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -239,6 +243,68 @@ func TestSMSSubmitUsesTheRequestedPhone(t *testing.T) {
 	}
 	if discoveries != 1 {
 		t.Fatal("SMS submission rediscovered a potentially different phone")
+	}
+}
+
+func TestSMSVerificationRetainsResponseWithoutRequestCode(t *testing.T) {
+	for _, status := range []int{200, 400} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("APPLESERVICES_2FA_DIAGNOSTIC_DIR", dir)
+			body := `{"success":true}`
+			if status == 400 {
+				body = `{"serviceErrors":[{"code":"-1","message":"original-response"}]}`
+			}
+			c := NewClient(headerProvider{})
+			c.smsPhoneID = 7
+			c.transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.Method != http.MethodPost || r.URL.Path != "/auth/verify/phone/securitycode" {
+					t.Fatal("unexpected verification request")
+				}
+				return &http.Response{StatusCode: status, Header: http.Header{"X-Private-Response": {"private-response-token"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+			})
+			err := c.SubmitSMSCode("test-account", "test-identity", "654321")
+			if (err != nil) != (status == 400) {
+				t.Fatal("diagnostics changed verification response handling")
+			}
+			files, err := filepath.Glob(filepath.Join(dir, "sms-verify-*.json"))
+			if err != nil || len(files) != 1 {
+				t.Fatal("verification response was not retained")
+			}
+			data, err := os.ReadFile(files[0])
+			if err != nil || bytes.Contains(data, []byte("654321")) {
+				t.Fatal("diagnostics lost the response or retained the submitted code")
+			}
+			var saved struct {
+				Stage   string              `json:"stage"`
+				Status  int                 `json:"status"`
+				Headers map[string][]string `json:"headers"`
+				Body    []byte              `json:"body"`
+			}
+			if json.Unmarshal(data, &saved) != nil || saved.Stage != "sms-verify" || saved.Status != status || string(saved.Body) != body || len(saved.Headers) == 0 {
+				t.Fatal("original verification response was changed")
+			}
+			info, err := os.Stat(files[0])
+			if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0600) {
+				t.Fatal("response must remain owner-only")
+			}
+		})
+	}
+}
+
+func TestSMSVerificationRejectsAppleErrorWithHTTP200(t *testing.T) {
+	c := NewClient(headerProvider{})
+	c.smsPhoneID = 7
+	c.transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"serviceErrors":[{"code":"-21669","message":"private-original-error"}]}`))}, nil
+	})
+	err := c.SubmitSMSCode("test-account", "test-identity", "654321")
+	var rejection *SecondFactorError
+	if !errors.As(err, &rejection) || rejection.Code != -21669 || rejection.HTTPStatus != 200 || strings.Contains(err.Error(), "private-") {
+		t.Fatal("HTTP 200 hid or exposed the rejected code response")
+	}
+	if c.VerifiedLoginResult() != nil {
+		t.Fatal("rejected code was treated as verified")
 	}
 }
 

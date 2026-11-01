@@ -134,3 +134,73 @@ printf 'FAMILY_STATUS_JSON={"member":true,"members":2,"self":1}\n'
 		}
 	}
 }
+
+func TestInteractiveFamilyHelperRetainsTerminalAndCancellationFailures(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX child fixture")
+	}
+	for _, canceled := range []bool{false, true} {
+		name := "exit"
+		if canceled {
+			name = "canceled"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			panel, err := control.New(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer panel.Close()
+			helper := filepath.Join(dir, "helper")
+			script := "#!/bin/sh\nprintf 'fixture-original-terminal-error\\n'\nexit 23\n"
+			if canceled {
+				script = "#!/bin/sh\nprintf 'fixture-original-terminal-error\\n'\n: > \"$APPLESERVICES_2FA_DIAGNOSTIC_DIR/child-started\"\nexec sleep 20\n"
+			}
+			if err := os.WriteFile(helper, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if canceled {
+				go func() {
+					// Wait for the child to write output so this exercises a killed
+					// process rather than an already-canceled command start.
+					for ctx.Err() == nil {
+						entries, _ := filepath.Glob(filepath.Join(dir, ".family-auth-diagnostics-*", "child-started"))
+						if len(entries) != 0 {
+							cancel()
+							return
+						}
+						time.Sleep(5 * time.Millisecond)
+					}
+				}()
+			}
+			_, err, finish := runInteractiveFamilyHelper(ctx, panel, "organizer", dir, helper, nil, []string{"APPLESERVICES_TARGET_PASSWORD=fixture-password"})
+			finish()
+			if err == nil {
+				t.Fatal("failed helper was reported as successful")
+			}
+			files, _ := filepath.Glob(filepath.Join(dir, ".family-auth-diagnostics-*", "helper-result.json"))
+			if len(files) != 1 {
+				t.Fatal("terminal helper result was discarded")
+			}
+			data, readErr := os.ReadFile(files[0])
+			var result struct {
+				Error        string `json:"error"`
+				Output       string `json:"output"`
+				ContextError string `json:"context_error"`
+				ExitCode     int    `json:"exit_code"`
+			}
+			if readErr != nil || json.Unmarshal(data, &result) != nil || result.Error == "" || !strings.Contains(result.Output, "fixture-original-terminal-error") {
+				t.Fatal("original terminal result was lost")
+			}
+			if canceled && result.ContextError == "" || !canceled && result.ExitCode != 23 {
+				t.Fatal("process exit cause was lost")
+			}
+			info, statErr := os.Stat(files[0])
+			if statErr != nil || info.Mode().Perm() != 0600 || bytes.Contains(data, []byte("fixture-password")) {
+				t.Fatal("diagnostics exposed permissions or password environment")
+			}
+		})
+	}
+}

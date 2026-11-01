@@ -1268,6 +1268,7 @@ func run() error {
 		}
 		checkData, responseErr := io.ReadAll(io.LimitReader(checkResponse.Body, (2<<20)+1))
 		checkResponse.Body.Close()
+		traceFamilyAPIResponse("family-member-check", checkResponse, checkData)
 		if responseErr != nil || len(checkData) > 2<<20 || checkResponse.StatusCode != http.StatusOK {
 			return errors.New("Apple did not accept the pool member target check")
 		}
@@ -1358,6 +1359,7 @@ func run() error {
 		}
 		if addResponse != nil {
 			addData, responseErr := io.ReadAll(io.LimitReader(addResponse.Body, (2<<20)+1))
+			traceFamilyAPIResponse("family-member-add", addResponse, addData)
 			addResponse.Body.Close()
 			if responseErr != nil || len(addData) > 2<<20 {
 				return errors.New("PET-bound pool member response is invalid")
@@ -1853,6 +1855,7 @@ func familyAuthenticationError(stage string, err error) error {
 }
 
 func ephemeralFamilyPET(ctx context.Context, native *nativeadi.Client, pushToken []byte, targetDir string, target appleservices.Session, password string, interactive bool) (string, error) {
+	defer func() { password = "" }()
 	cookies := map[string][]gsa.CookieKV{}
 	for _, cookie := range target.Cookies {
 		cookies[cookie.URL] = append(cookies[cookie.URL], gsa.CookieKV{Name: cookie.Name, Value: cookie.Value})
@@ -1863,11 +1866,10 @@ func ephemeralFamilyPET(ctx context.Context, native *nativeadi.Client, pushToken
 		return "", err
 	}
 	result, err := client.Login(target.AppleID, password)
-	password = ""
 	if err != nil && interactive {
 		var repair *gsa.AccountRepairError
 		if errors.As(err, &repair) && repair.Pending != nil {
-			result, err = continueFamilyRepair(ctx, client, target.AppleID, target.DSID, repair.Pending, os.Stdin, os.Stdout)
+			result, err = continueFamilyRepair(ctx, client, target.AppleID, target.DSID, password, repair.Pending, os.Stdin, os.Stdout)
 			if err != nil {
 				return "", err
 			}
@@ -1934,9 +1936,9 @@ func ephemeralFamilyPET(ctx context.Context, native *nativeadi.Client, pushToken
 			return "", familyAuthenticationError("trusted-device-verify", err)
 		}
 		code = ""
-		result = client.VerifiedLoginResult()
-		if result == nil || result.NeedsTwoFactor || result.SessionPayload == nil {
-			return "", errors.New("ephemeral FamilyKit verification did not complete")
+		result, err = completeFamilyVerification(client, target.AppleID, target.DSID, password)
+		if err != nil {
+			return "", err
 		}
 	}
 	pet, err := icloud.PETFromSPD(result.SessionPayload)
@@ -2006,6 +2008,7 @@ func safeFamilyStatus(values map[string]any) string {
 
 func main() {
 	if err := run(); err != nil {
+		traceFamilyAuthenticationError("helper-exit", err)
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

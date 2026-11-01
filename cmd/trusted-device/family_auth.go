@@ -103,6 +103,7 @@ func runInteractiveFamilyHelper(ctx context.Context, panel *control.Server, orga
 				return
 			case value := <-input:
 				err := encoder.Encode(value)
+				fmt.Fprintf(os.Stderr, "FamilyKit attempt=%s input=%s forwarded=%t\n", attempt, value.Action, err == nil)
 				value.Code = ""
 				if err != nil {
 					return
@@ -119,6 +120,21 @@ func runInteractiveFamilyHelper(ctx context.Context, panel *control.Server, orga
 		panel.SetFamilyAuthenticationStage(id, "verifying-membership")
 	} else {
 		fmt.Fprintf(os.Stderr, "FamilyKit attempt=%s failed; private-diagnostics-retained=true\n", attempt)
+		result := map[string]any{"error": err.Error(), "output": writer.output.String()}
+		if ctx.Err() != nil {
+			result["context_error"] = ctx.Err().Error()
+		}
+		if exit, ok := err.(*exec.ExitError); ok {
+			result["exit_code"] = exit.ExitCode()
+		}
+		data, encodeErr := json.Marshal(result)
+		if encodeErr == nil {
+			// Preserve failures that bypass the helper's ordinary error return,
+			// including cancellation, process termination and native crashes.
+			if writeErr := os.WriteFile(filepath.Join(diagnostics, "helper-result.json"), data, 0600); writeErr != nil {
+				fmt.Fprintf(os.Stderr, "FamilyKit attempt=%s helper-result-retained=false\n", attempt)
+			}
+		}
 	}
 	return writer.output.String(), err, finish
 }

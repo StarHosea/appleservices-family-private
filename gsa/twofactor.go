@@ -438,6 +438,11 @@ func (c *Client) SubmitSMSCode(dsid, idmsToken, code string) error {
 		http.CookieJar(c.cookieJar),
 		http.Timeout(10*time.Second),
 	)
+	if result != nil {
+		if traceErr := traceTwoFactorResponse("sms-verify", result.StatusCode, result.Headers, result.Body); traceErr != nil {
+			return traceErr
+		}
+	}
 	if result != nil && (result.StatusCode < 200 || result.StatusCode >= 300) {
 		return secondFactorResponseError("submit sms code", result.StatusCode, result.Body)
 	}
@@ -446,6 +451,10 @@ func (c *Client) SubmitSMSCode(dsid, idmsToken, code string) error {
 	}
 	if result.StatusCode < 200 || result.StatusCode >= 300 {
 		return fmt.Errorf("gsa: submit sms code: status %d", result.StatusCode)
+	}
+	rejection := secondFactorResponseError("submit sms code", result.StatusCode, result.Body).(*SecondFactorError)
+	if rejection.Code != 0 || rejection.TooManyCodesSent || rejection.TooManyCodesValidated || rejection.SecurityCodeLocked {
+		return rejection
 	}
 	c.collectVerifiedTokens(result.Headers)
 	return nil

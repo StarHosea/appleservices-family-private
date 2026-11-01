@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,11 +18,17 @@ import (
 )
 
 // This interface keeps repair on the original organizer-bound GSA client.
-// Neither its pending payload nor its PET is written to disk or sent to the UI.
+// Pending inputs stay in memory; response diagnostics remain private to the
+// server and never enter the UI.
 type familyRepairClient interface {
+	familyVerificationClient
 	ResumeRepair(string, *gsa.PendingRepair) (*gsa.LoginResult, error)
 	RequestSMSCode(string, string) error
 	SubmitSMSCode(string, string, string) error
+}
+
+type familyVerificationClient interface {
+	Login(string, string) (*gsa.LoginResult, error)
 	VerifiedLoginResult() *gsa.LoginResult
 }
 
@@ -64,7 +71,7 @@ func readFamilyAuthInput(ctx context.Context, decoder *json.Decoder, expected st
 	}
 }
 
-func continueFamilyRepair(ctx context.Context, client familyRepairClient, appleID, adsid string, pending *gsa.PendingRepair, input io.Reader, output io.Writer) (*gsa.LoginResult, error) {
+func continueFamilyRepair(ctx context.Context, client familyRepairClient, appleID, adsid, password string, pending *gsa.PendingRepair, input io.Reader, output io.Writer) (*gsa.LoginResult, error) {
 	if pending == nil || !strings.EqualFold(pending.AppleID, appleID) || pending.Session.DSID != adsid || adsid == "" {
 		return nil, errors.New("家庭临时认证的 repair 会话绑定不可用")
 	}
@@ -105,7 +112,22 @@ func continueFamilyRepair(ctx context.Context, client familyRepairClient, appleI
 	if err != nil {
 		return nil, familyAuthenticationError("repair-sms-verify", err)
 	}
-	result = client.VerifiedLoginResult()
+	return completeFamilyVerification(client, appleID, adsid, password)
+}
+
+// Like the regular login flow, finish one password handshake on the same client
+// when an accepted code response did not itself issue a PET. This retains the
+// organizer identity and verification cookies, and never discovers or sends
+// another code. A renewed challenge or repair is terminal for this attempt.
+func completeFamilyVerification(client familyVerificationClient, appleID, adsid, password string) (*gsa.LoginResult, error) {
+	result := client.VerifiedLoginResult()
+	if result == nil && password != "" {
+		var err error
+		result, err = client.Login(appleID, password)
+		if err != nil {
+			return nil, familyAuthenticationError("post-code-login", err)
+		}
+	}
 	if result == nil || result.NeedsTwoFactor || result.SessionPayload["adsid"] != adsid {
 		return nil, errors.New("Apple 尚未签发绑定当前家庭临时会话的凭据")
 	}
@@ -119,10 +141,6 @@ func continueFamilyRepair(ctx context.Context, client familyRepairClient, appleI
 // The existing GSA trace writes the matching HTTP status, headers and raw body
 // into this same owner-only directory. Successful attempts remove the directory.
 func traceFamilyAuthenticationError(stage string, err error) {
-	directory := os.Getenv("APPLESERVICES_2FA_DIAGNOSTIC_DIR")
-	if directory == "" {
-		return
-	}
 	details := map[string]any{"stage": stage, "error": err.Error()}
 	var rejection *gsa.AuthenticationError
 	if errors.As(err, &rejection) {
@@ -130,15 +148,31 @@ func traceFamilyAuthenticationError(stage string, err error) {
 		details["apple_code"] = rejection.Code
 		details["server_message"] = rejection.ServerMessage
 	}
+	if writeFamilyPrivateDiagnostic("family-error", details) {
+		fmt.Fprintf(os.Stderr, "FamilyKit authentication stage=%s failed; original-error-retained=true\n", stage)
+	}
+}
+
+func traceFamilyAPIResponse(stage string, response *http.Response, body []byte) {
+	if response != nil && writeFamilyPrivateDiagnostic(stage, map[string]any{"stage": stage, "status": response.StatusCode, "headers": response.Header, "body": body}) {
+		fmt.Fprintf(os.Stderr, "FamilyKit API stage=%s; HTTP=%d; response-bytes=%d\n", stage, response.StatusCode, len(body))
+	}
+}
+
+func writeFamilyPrivateDiagnostic(prefix string, details map[string]any) bool {
+	directory := os.Getenv("APPLESERVICES_2FA_DIAGNOSTIC_DIR")
+	if directory == "" {
+		return false
+	}
 	data, encodeErr := json.Marshal(details)
 	if encodeErr != nil {
-		return
+		return false
 	}
-	file, openErr := os.OpenFile(filepath.Join(directory, fmt.Sprintf("family-error-%d.json", time.Now().UnixNano())), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	file, openErr := os.OpenFile(filepath.Join(directory, fmt.Sprintf("%s-%d.json", prefix, time.Now().UnixNano())), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if openErr != nil {
-		return
+		return false
 	}
-	defer file.Close()
-	file.Write(data)
-	fmt.Fprintf(os.Stderr, "FamilyKit authentication stage=%s failed; original-error-retained=true\n", stage)
+	_, writeErr := file.Write(data)
+	closeErr := file.Close()
+	return writeErr == nil && closeErr == nil
 }
