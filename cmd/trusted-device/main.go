@@ -556,7 +556,7 @@ func run() (runErr error) {
 	refresh := time.NewTicker(*refreshEvery)
 	defer refresh.Stop()
 	beginRenewal := func() (maintainedLogin, error) {
-		if *resumeSession {
+		if *resumeSession || *resumeRepair {
 			accepted, err := store.LoadAcceptedICloud()
 			if err != nil {
 				return nil, err
@@ -566,7 +566,7 @@ func run() (runErr error) {
 		return appleservices.BeginLogin(appleservices.Credentials{AppleID: appleID, Password: password}, store, options...)
 	}
 	renew := func() control.Result {
-		renewed, devices, err := renewSessionMode(beginRenewal, accountID, registration, !*resumeSession)
+		renewed, devices, err := renewSessionMode(beginRenewal, accountID, registration, !*resumeSession && !*resumeRepair)
 		if err != nil {
 			status.State = "refresh_failed"
 			var queryErr deviceQueryError
