@@ -967,6 +967,8 @@ func (s *Server) startInMode(ctx context.Context, dir string, creds credentials,
 	if !s.launchMu.TryLock() {
 		return control.Result{Message: "正在启动，请稍等"}
 	}
+	launchReady := make(chan struct{})
+	defer close(launchReady)
 	defer s.launchMu.Unlock()
 	s.setMessage(account, "")
 	current := s.readStatusFrom(dir)
@@ -1042,7 +1044,9 @@ func (s *Server) startInMode(ctx context.Context, dir string, creds credentials,
 		return control.Result{Message: "后台启动失败，请检查本机依赖"}
 	}
 	go func() {
-		if err := command.Wait(); err != nil {
+		err := command.Wait()
+		<-launchReady
+		if err != nil {
 			message := "后台异常停止，请重新连接"
 			if detail := lastProcessError(diagnostic.Name()); detail != "" {
 				if detail == accountRepairMessage || detail == accountInactiveMessage {
@@ -1052,6 +1056,11 @@ func (s *Server) startInMode(ctx context.Context, dir string, creds credentials,
 				}
 			}
 			s.setMessage(account, message)
+			return
+		}
+		status := s.readStatusFrom(dir)
+		if account != nil && status.PID == command.Process.Pid && status.State == "awaiting_icloud_activation" {
+			s.completeVerifiedLogin(account)
 		}
 	}()
 	if resume {

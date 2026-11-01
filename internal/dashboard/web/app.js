@@ -138,6 +138,8 @@ function renderLogin(view){
 function scheduleAutoRefresh(view,activated){
   if(busy||autoRefreshScheduled||(isLoginPage()&&!loginStartedAccount))return;
   if(!activated){
+    // The server continues this verified handoff even if this tab closes.
+    if(view.status?.state==='awaiting_icloud_activation')return;
     const key=selectedAccount+'|activation|'+(view.status?.pid||'saved')+'|'+((view.status?.running?view.status?.last_refresh_at:view.status?.updated_at)||view.status?.state||'saved');
     if(view.activation_ready&&!view.launching&&(!view.status?.running||view.status?.authenticated)&&!activationAttempts.has(key)&&!autoRefreshAttempted(key)&&acquireAutoRefreshLease(selectedAccount)){
       activationAttempts.add(key);markAutoRefreshAttempt(key);autoRefreshScheduled=true;

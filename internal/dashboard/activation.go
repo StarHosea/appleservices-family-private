@@ -179,6 +179,25 @@ func installAcceptedCheckpoint(source, destination string) error {
 	return errors.Join(writeErr, closeErr)
 }
 
+// Finish the verified worker's handoff without depending on a browser tab.
+// No password or verification code is retained across this boundary.
+func (s *Server) completeVerifiedLogin(account *Account) {
+	s.setLaunching(account, true)
+	defer s.setLaunching(account, false)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	result := s.activationAction(ctx, account, true, "")
+	cacheSafeActionResult(account, &result)
+	if !result.OK {
+		s.setMessage(account, result.Message)
+		return
+	}
+	result = s.startSavedAccount(ctx, account)
+	if !result.OK {
+		s.setMessage(account, result.Message)
+	}
+}
+
 func (s *Server) activationAction(parent context.Context, account *Account, accept bool, approvedTuple string) control.Result {
 	if account == nil || !verifiedGSACheckpointReady(account.Dir, account.AppleID) {
 		return control.Result{Message: "请先完成账号密码与验证码验证", Stage: "activation-session"}
@@ -219,22 +238,28 @@ func (s *Server) activationAction(parent context.Context, account *Account, acce
 	}
 	helper := filepath.Join(filepath.Dir(s.config.Worker), platform.Executable("accountsetupcheck"))
 	termsAccepted := false
-	if plan != nil {
+	acceptCurrentTerms := func() *control.Result {
 		// Automatic connection is an explicit dashboard operation covered by the
 		// owner's standing terms consent. Bind acceptance to Apple's current plan.
 		if approvedTuple == "" {
 			approvedTuple = activationTuple(plan)
 		}
 		if approvedTuple == "" || approvedTuple != activationTuple(plan) {
-			return control.Result{Message: "Apple 条款版本已变化，请重新查看并确认", Stage: "activation-consent", Activation: plan}
+			return &control.Result{Message: "Apple 条款版本已变化，请重新查看并确认", Stage: "activation-consent", Activation: plan}
 		}
 		termsDump := filepath.Join(runDir, "terms.html")
 		_, _ = runActivationCommand(ctx, root, account.AppleID, helper,
 			"-dir", account.Dir, "-resume", filepath.Join(account.Dir, "session.json"), "-accept-terms", "-terms-only", "-expected-terms", approvedTuple, "-dump", termsDump)
 		if !readTermsReceipt(termsDump + ".update.json") {
-			return control.Result{Message: "Apple 未确认条款接受状态", Stage: "activation-terms", Activation: plan}
+			return &control.Result{Message: "Apple 未确认条款接受状态", Stage: "activation-terms", Activation: plan}
 		}
 		termsAccepted = true
+		return nil
+	}
+	if plan != nil {
+		if failure := acceptCurrentTerms(); failure != nil {
+			return *failure
+		}
 	}
 	runtimeSource := filepath.Join(root, ".cache", "mac-nac-runtime")
 	runtimeCopy := filepath.Join(runDir, "nac-runtime")
@@ -279,6 +304,30 @@ func (s *Server) activationAction(parent context.Context, account *Account, acce
 		delegateArgs = append(delegateArgs, "-terms-accepted")
 	}
 	delegateOutput, delegateErr := runActivationCommand(ctx, root, account.AppleID, helper, delegateArgs...)
+	if !termsAccepted && strings.Contains(string(delegateOutput), "ErrorID=MOBILEME_TERMS_OF_SERVICE_UPDATE") {
+		// Apple can expose the update UI only after the first NAC exchange.
+		// Read its current versions, accept once under the owner's standing
+		// consent, then make one continuation with the acknowledged receipt.
+		termsPlanDir := filepath.Join(runDir, "after-delegate")
+		if err := os.Mkdir(termsPlanDir, 0700); err != nil {
+			return control.Result{Message: "无法准备条款更新", Stage: "activation-local"}
+		}
+		plan, err = s.activationPlan(ctx, account, termsPlanDir)
+		if err != nil {
+			return control.Result{Message: err.Error(), Stage: "activation-plan"}
+		}
+		if failure := acceptCurrentTerms(); failure != nil {
+			return *failure
+		}
+		// The helper refuses to overwrite private outputs, including refusals.
+		for index := range delegateArgs {
+			if delegateArgs[index] == "-dump" {
+				delegateArgs[index+1] = filepath.Join(termsPlanDir, "delegate.plist")
+			}
+		}
+		delegateArgs = append(delegateArgs, "-terms-accepted")
+		delegateOutput, delegateErr = runActivationCommand(ctx, root, account.AppleID, helper, delegateArgs...)
+	}
 	if delegateErr != nil || !strings.Contains(string(delegateOutput), "delegate accepted; mme-token-present=true") || !strings.Contains(string(delegateOutput), "quota accepted;") {
 		if strings.Contains(string(delegateOutput), "(HTTP 401)") {
 			return control.Result{Message: "Apple 拒绝了 iCloud 登录凭据（HTTP 401），本次未完成连接", Stage: "activation-delegate"}

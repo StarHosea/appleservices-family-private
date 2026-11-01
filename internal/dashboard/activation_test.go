@@ -15,12 +15,19 @@ import (
 )
 
 func TestSetup401ConnectionMakesOneNACDelegateWithoutAcceptingTerms(t *testing.T) {
-	t.Run("legacy-python", func(t *testing.T) { testSetup401Connection(t, false) })
-	t.Run("native-python", func(t *testing.T) { testSetup401Connection(t, true) })
+	t.Run("legacy-python", func(t *testing.T) { testSetup401Connection(t, false, "") })
+	t.Run("native-python", func(t *testing.T) { testSetup401Connection(t, true, "") })
+	t.Run("late-terms-accepted", func(t *testing.T) { testSetup401Connection(t, true, "true") })
+	t.Run("late-terms-refused", func(t *testing.T) { testSetup401Connection(t, true, "false") })
+	t.Run("worker-handoff-without-browser", func(t *testing.T) { testSetup401Connection(t, true, "background") })
 }
 
-func testSetup401Connection(t *testing.T, nativePython bool) {
+func testSetup401Connection(t *testing.T, nativePython bool, lateTermsReceipt string) {
 	t.Helper()
+	background := lateTermsReceipt == "background"
+	if background {
+		lateTermsReceipt = "false"
+	}
 	if runtime.GOOS == "windows" {
 		t.Skip("fixture uses POSIX executables")
 	}
@@ -55,6 +62,45 @@ printf 'delegate\n' >> "$0.calls"
 printf 'icloud: /setup/signin/v2/login refused (HTTP 401) ErrorID=UNAUTHORIZED\n'
 exit 1
 `
+	if lateTermsReceipt != "" {
+		helper = `#!/bin/sh
+mode=plan
+consent=0
+dump=
+tuple=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -delegate-only) mode=delegate ;;
+    -accept-terms) mode=terms ;;
+    -terms-accepted) consent=1 ;;
+    -dump) shift; dump=$1 ;;
+    -expected-terms) shift; tuple=$1 ;;
+  esac
+  shift
+done
+printf '%s\n' "$mode" >> "$0.calls"
+if [ "$mode" = plan ]; then
+  if [ ! -f "$0.planned" ]; then
+    touch "$0.planned"
+    printf '{"HTTP":401}\n'
+    exit 1
+  fi
+  printf '{"terms-plan":true,"region":"CN","icloud-version":"123","media-version":"456"}\n'
+  exit 0
+fi
+if [ "$mode" = terms ]; then
+  [ "$tuple" = 'CN:123:456' ] || exit 98
+  printf '{"success":` + lateTermsReceipt + `}' > "$dump.update.json"
+  exit 0
+fi
+if [ "$consent" = 0 ]; then
+  printf 'icloud: refused (HTTP 409) ErrorID=MOBILEME_TERMS_OF_SERVICE_UPDATE\n'
+else
+  printf 'icloud: refused (HTTP 401) ErrorID=UNAUTHORIZED\n'
+fi
+exit 1
+`
+	}
 	nac := `#!/bin/sh
 printf '%s\n' "$@" > "$0.args"
 printf '{"stage": "NACSign"}\n'
@@ -70,12 +116,64 @@ printf '{"stage": "NACSign"}\n'
 		}
 	}
 	server := &Server{config: Config{Worker: filepath.Join(bin, "worker"), Python: filepath.Join(bin, "nacstub"), MacPushSetup: filepath.Join(root, "tools", "mac-push-check.py")}}
-	result := server.activationAction(context.Background(), account, true, "")
-	if result.OK || result.Stage != "activation-delegate" || !strings.Contains(result.Message, "HTTP 401") || acceptedCheckpointReady(account.Dir, account.AppleID) {
+	var result control.Result
+	if background {
+		// A real child process exits at the verified checkpoint. No HTTP
+		// request or browser callback is available to initiate activation.
+		if err := os.MkdirAll(filepath.Join(account.Dir, "native-adi"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range []string{"device.json", "push.json", "native-adi/hw_info.plist"} {
+			if err := os.WriteFile(filepath.Join(account.Dir, path), []byte("fixture"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		worker := `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = -dir ]; then shift; dir=$1; fi
+  shift
+done
+printf '{"pid":%s,"running":false,"state":"awaiting_icloud_activation"}' "$$" > "$dir/runtime.json"
+`
+		if err := os.WriteFile(server.config.Worker, []byte(worker), 0700); err != nil {
+			t.Fatal(err)
+		}
+		started := server.startIn(context.Background(), account.Dir, credentials{AppleID: account.AppleID, Password: "test-password"}, account)
+		if !started.OK {
+			t.Fatal(started.Message)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			account.mu.Lock()
+			message, launching := account.message, account.launching
+			account.mu.Unlock()
+			if message != "" && !launching {
+				result = control.Result{Message: message, Stage: "activation-terms"}
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("verified worker exited without completing its server-side handoff")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	} else {
+		result = server.activationAction(context.Background(), account, true, "")
+	}
+	wantStage, wantMessage := "activation-delegate", "HTTP 401"
+	wantCalls := "delegate\n"
+	if lateTermsReceipt != "" {
+		wantCalls = "plan\ndelegate\nplan\nterms\n"
+		if lateTermsReceipt == "true" {
+			wantCalls += "delegate\n"
+		} else {
+			wantStage, wantMessage = "activation-terms", "Apple 未确认条款接受状态"
+		}
+	}
+	if result.OK || result.Stage != wantStage || !strings.Contains(result.Message, wantMessage) || acceptedCheckpointReady(account.Dir, account.AppleID) {
 		t.Fatalf("unaccepted delegate was treated as success: %#v", result)
 	}
 	calls, err := os.ReadFile(filepath.Join(bin, "accountsetupcheck.calls"))
-	if err != nil || string(calls) != "delegate\n" {
+	if err != nil || string(calls) != wantCalls {
 		t.Fatal("connection retried a refused delegate or failed to reach NAC", err)
 	}
 	args, err := os.ReadFile(nacProgram + ".args")

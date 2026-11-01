@@ -41,7 +41,7 @@ const settle=()=>new Promise(resolve=>setImmediate(resolve));
 
 test('a new verified worker can activate after the previous login failed, without retrying the old session',async()=>{
   const f=fixture(()=>({ok:false,message:'Apple rejected the old session'}));
-  f.run("var view={activation_ready:true,status:{pid:100,last_refresh_at:'0001-01-01T00:00:00Z',updated_at:'2026-11-01T08:00:00Z',state:'awaiting_icloud_activation'}};scheduleAutoRefresh(view,false)");
+  f.run("var view={activation_ready:true,status:{pid:100,last_refresh_at:'0001-01-01T00:00:00Z',updated_at:'2026-11-01T08:00:00Z',state:'failed'}};scheduleAutoRefresh(view,false)");
   assert.equal(f.timers.length,1);
   f.timers.shift()();
   await settle();
@@ -51,6 +51,13 @@ test('a new verified worker can activate after the previous login failed, withou
   assert.equal(f.timers.length,0,'failed credentials were automatically resubmitted');
   f.run("view.status.updated_at='2026-11-01T09:00:00Z';scheduleAutoRefresh(view,false)");
   assert.equal(f.timers.length,1,'a previous failure blocked a new login after container PID reuse');
+});
+
+test('the browser does not duplicate the server-owned verified login continuation',()=>{
+  const f=fixture(()=>{throw new Error('duplicate activation');});
+  f.run("scheduleAutoRefresh({activation_ready:true,status:{state:'awaiting_icloud_activation',running:false}},false)");
+  assert.equal(f.timers.length,0);
+  assert.equal(f.requests.length,0);
 });
 
 test('send click dispatches once and shows progress, then the code form',async()=>{
