@@ -126,3 +126,64 @@ test('switching accounts clears authentication and verification UI',()=>{
   assert.equal(f.get('hmeReachableCodeForm').hidden,true);
   assert.equal(f.get('hmeReachableStatus').hidden,true);
 });
+
+function prepareFamily(f){
+  f.run("current={status:{running:true,authenticated:true},control_ready:true};render=()=>{};");
+  f.get('familyOrganizer').value='organizer-a';
+}
+
+test('passwordless family join authenticates inline once without reconnecting the account',async()=>{
+  let complete;
+  const f=fixture(request=>request.password?new Promise(resolve=>{complete=resolve;}):{ok:false,stage:'family-password-required'});
+  prepareFamily(f);
+  await f.run("action('family-add-self',{code:'organizer-a'})");
+  assert.equal(f.get('familyAuthForm').hidden,false);
+  assert.equal(f.get('familyPassword').focused,true);
+  assert.equal(f.get('notice').hidden,true);
+  assert.equal(f.run('location.hash'),'#overview');
+  f.get('familyPassword').value='test-only-password';
+  const pending=f.get('familyAuthForm').listeners.submit({preventDefault(){}});
+  assert.equal(f.get('familyPassword').value,'');
+  assert.match(f.get('familyAuthStatus').textContent,/正在验证/);
+  await f.get('familyAuthForm').listeners.submit({preventDefault(){}});
+  assert.equal(f.requests.length,2,'duplicate family submission while pending');
+  assert.equal(f.requests[1].action,'family-add-self');
+  assert.equal(f.requests[1].code,'organizer-a');
+  assert.equal(f.requests[1].password,'test-only-password');
+  complete({ok:true,family:{member:true,self:1,storage_known:true,storage_participating:true,storage_available:true,storage_enabled:true}});
+  f.context.requestAnimationFrame=fn=>fn();
+  await pending;
+  assert.equal(f.get('familyAuthForm').hidden,true);
+  assert.equal(f.run('familyAuthAccount'),'');
+  assert.equal(f.requests.length,2);
+});
+
+test('family authentication rejects changed account or organizer and clears the password',async()=>{
+  for(const change of ["selectedAccount='another-account'","$('familyOrganizer').value='organizer-b'"]){
+    const f=fixture(()=>({ok:false,stage:'family-password-required'}));
+    prepareFamily(f);
+    await f.run("action('family-add-self',{code:'organizer-a'})");
+    f.get('familyPassword').value='test-only-password';
+    f.run(change);
+    await f.get('familyAuthForm').listeners.submit({preventDefault(){}});
+    assert.equal(f.requests.length,1);
+    assert.equal(f.get('familyPassword').value,'');
+    assert.equal(f.get('familyAuthForm').hidden,true);
+  }
+});
+
+test('stale family state cannot submit an inline join and an error never retries automatically',async()=>{
+  const f=fixture(request=>request.password?{ok:false,stage:'family-action',message:'本次操作未完成，请重新核验家庭状态'}:{ok:false,stage:'family-password-required'});
+  prepareFamily(f);
+  await f.run("action('family-add-self',{code:'organizer-a'})");
+  f.get('familyPassword').value='test-only-password';
+  f.run('familyStale=true');
+  await f.get('familyAuthForm').listeners.submit({preventDefault(){}});
+  assert.equal(f.requests.length,1);
+  f.run('familyStale=false');
+  await f.get('familyAuthForm').listeners.submit({preventDefault(){}});
+  assert.equal(f.requests.length,2);
+  assert.equal(f.get('familyPassword').value,'');
+  assert.match(f.get('familyAuthStatus').textContent,/本次操作未完成/);
+  assert.equal(f.get('familyAuthForm').hidden,false);
+});

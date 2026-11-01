@@ -81,6 +81,11 @@
       <button class="button button-primary" id="familyAddButton" disabled>加入家庭并使用共享空间</button>
       <button class="button button-light" id="familyJoinStorageButton" disabled>仅加入共享储存</button>
     </div>
+    <form id="familyAuthForm" class="hme-auth" hidden>
+      <label for="familyPassword">验证当前账号后继续加入家庭<input id="familyPassword" type="password" autocomplete="off" placeholder="当前 Apple 账号密码" required></label>
+      <button class="button button-primary" type="submit">验证并加入家庭</button>
+      <small id="familyAuthStatus" role="status" aria-live="polite">密码仅用于本次加入家庭，不保存；当前登录保持在线。</small>
+    </form>
     <div class="family-remove-controls" id="familyRemoveControls" hidden>
       <div><strong>成员管理</strong><small>从当前家庭移出一个池内普通成员</small></div>
       <select id="familyRemoveMember" aria-label="要移出的家庭成员"></select>

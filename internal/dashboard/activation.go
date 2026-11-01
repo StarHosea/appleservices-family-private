@@ -180,8 +180,10 @@ func installAcceptedCheckpoint(source, destination string) error {
 }
 
 // Finish the verified worker's handoff without depending on a browser tab.
-// No password or verification code is retained across this boundary.
-func (s *Server) completeVerifiedLogin(account *Account) {
+// Keep the fresh password in memory until the resumed worker has inherited it;
+// activation helpers and saved checkpoints never receive it.
+func (s *Server) completeVerifiedLogin(account *Account, password string) {
+	defer func() { password = "" }()
 	s.setLaunching(account, true)
 	defer s.setLaunching(account, false)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -192,7 +194,7 @@ func (s *Server) completeVerifiedLogin(account *Account) {
 		s.setMessage(account, result.Message)
 		return
 	}
-	result = s.startSavedAccount(ctx, account)
+	result = s.startSavedAccountWithPassword(ctx, account, password)
 	if !result.OK {
 		s.setMessage(account, result.Message)
 	}

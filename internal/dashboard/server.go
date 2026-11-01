@@ -957,10 +957,16 @@ func (s *Server) startIn(ctx context.Context, dir string, creds credentials, acc
 }
 
 func (s *Server) startSavedAccount(ctx context.Context, account *Account) control.Result {
+	return s.startSavedAccountWithPassword(ctx, account, "")
+}
+
+// Carry a fresh login's password only through the in-memory activation handoff.
+// Startup restoration deliberately calls startSavedAccount without a password.
+func (s *Server) startSavedAccountWithPassword(ctx context.Context, account *Account, password string) control.Result {
 	if account == nil || !verifiedGSACheckpointReady(account.Dir, account.AppleID) || !acceptedCheckpointReady(account.Dir, account.AppleID) {
 		return control.Result{Message: "已保存登录会话不可用，请输入当前密码重新连接"}
 	}
-	return s.startInMode(ctx, account.Dir, credentials{AppleID: account.AppleID}, account, true)
+	return s.startInMode(ctx, account.Dir, credentials{AppleID: account.AppleID, Password: password}, account, true)
 }
 
 func (s *Server) startInMode(ctx context.Context, dir string, creds credentials, account *Account, resume bool) control.Result {
@@ -1036,11 +1042,13 @@ func (s *Server) startInMode(ctx context.Context, dir string, creds credentials,
 		}
 	}
 	command.Env = append(command.Env, "APPLESERVICES_APPLEID="+strings.TrimSpace(creds.AppleID))
-	if !resume {
+	if creds.Password != "" {
 		command.Env = append(command.Env, "APPLESERVICES_PASSWORD="+creds.Password)
 	}
 	command.Stdout, command.Stderr = output, diagnostic
-	if command.Start() != nil {
+	startErr := command.Start()
+	command.Env = nil
+	if startErr != nil {
 		return control.Result{Message: "后台启动失败，请检查本机依赖"}
 	}
 	go func() {
@@ -1060,7 +1068,7 @@ func (s *Server) startInMode(ctx context.Context, dir string, creds credentials,
 		}
 		status := s.readStatusFrom(dir)
 		if account != nil && status.PID == command.Process.Pid && status.State == "awaiting_icloud_activation" {
-			s.completeVerifiedLogin(account)
+			s.completeVerifiedLogin(account, creds.Password)
 		}
 	}()
 	if resume {

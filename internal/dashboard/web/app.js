@@ -1,6 +1,6 @@
 'use strict';
 const $=id=>document.getElementById(id), token=document.querySelector('meta[name="app-token"]').content;
-let loginMode='reconnect',loginAccount='',current=null,busy=false,privateCode='',privateCodeKind='',hideAt=0,lastState='',lastQuery='',lastRefresh='',lastRequest='',noticeTimer,selectedAccount=localStorage.getItem('selected-account')||'',familyInfo=null,familyAccount='',familyCheckedAt='',familyStale=false,storageAccount='',storageCheckedAt='',planAccount='',planCheckedAt='',poolOrganizerAccount=localStorage.getItem('family-organizer-account')||'',poolOrganizerName=localStorage.getItem('family-organizer-name')||'',purchaseAction='',purchaseLabel='',hmeInfo=null,hmeAccount='',hmeCandidate='',hmeFilter='active',hmeVisible=100,hmeEditing='',hmeReachableAction='',activationInfo=null,activationAccount='',autoRefreshScheduled=false;
+let loginMode='reconnect',loginAccount='',current=null,busy=false,privateCode='',privateCodeKind='',hideAt=0,lastState='',lastQuery='',lastRefresh='',lastRequest='',noticeTimer,selectedAccount=localStorage.getItem('selected-account')||'',familyInfo=null,familyAuthAccount='',familyAuthOrganizer='',familyAccount='',familyCheckedAt='',familyStale=false,storageAccount='',storageCheckedAt='',planAccount='',planCheckedAt='',poolOrganizerAccount=localStorage.getItem('family-organizer-account')||'',poolOrganizerName=localStorage.getItem('family-organizer-name')||'',purchaseAction='',purchaseLabel='',hmeInfo=null,hmeAccount='',hmeCandidate='',hmeFilter='active',hmeVisible=100,hmeEditing='',hmeReachableAction='',activationInfo=null,activationAccount='',autoRefreshScheduled=false;
 const autoRefreshState=new Map();
 const hmeReadAttempts=new Set();
 const activationAttempts=new Set();
@@ -60,7 +60,9 @@ function renderFamilyMemberAccounts(info){
     row.append(account,tags);list.append(row);
   }
 }
+function resetFamilyAuth(){familyAuthAccount='';familyAuthOrganizer='';$('familyPassword').value='';$('familyAuthForm').hidden=true;$('familyAuthStatus').textContent='密码仅用于本次加入家庭，不保存；当前登录保持在线。';}
 function renderFamily(info,{checkedAt='',stale=false,animate=true}={}){
+  if(familyAuthAccount&&(familyAuthAccount!==selectedAccount||info?.member))resetFamilyAuth();
   familyInfo=info||null;familyAccount=selectedAccount;
   const shell=$('familyCard'),card=$('familyStatus'),metrics=$('familyMetrics'),map=$('familyMap'),controls=$('familyControls'),removeControls=$('familyRemoveControls');card.className='family-status';
   updateFamilyCacheMeta(checkedAt,stale,!!info);
@@ -178,7 +180,7 @@ $('accountTag').hidden=!view.account;$('accountTag').textContent=view.account;$(
 // The account name and avatar are rendered from the account list (renderAccounts).
 $('startButton').hidden=running;$('startButton').textContent=['failed','account_repair_required','account_inactive'].includes(status.state)?'重新连接':'连接账户';$('startButton').disabled=busy||starting;$('renewButton').hidden=!online;$('renewButton').disabled=busy||!view.control_ready;$('stopButton').hidden=!status.running;$('stopButton').disabled=busy;
 $('sessionHint').textContent=online?'上次续期 '+time(status.last_refresh_at):activated?'已保存 Apple 验收会话':'登录身份会在本机保留';const storageRefreshing=autoRefreshAttemptStatus(autoRefreshKey('storage',view.storage_checked_at))==='refreshing',planRefreshing=autoRefreshAttemptStatus(autoRefreshKey('plan',view.storage_plan_checked_at))==='refreshing';$('codeButton').disabled=busy||!view.code_ready||!online;$('devicesButton').disabled=busy||!online||!view.control_ready;$('storageButton').disabled=busy||storageRefreshing||(!activated&&(!online||!view.control_ready));$('planButton').disabled=busy||planRefreshing||(!activated&&(!online||!view.control_ready));$('purchaseButton').disabled=busy||!online||!view.control_ready||!purchaseAction;$('storeAuthButton').disabled=busy||!online||!view.control_ready;$('storeAuthForm').querySelector('button').disabled=busy;
-if(familyAccount&&familyAccount!==selectedAccount)renderFamily(null);const selectedFamily=familyAccount===selectedAccount?familyInfo:null,familyRefreshing=autoRefreshAttemptStatus(autoRefreshKey('family',view.family_checked_at))==='refreshing';$('familyRefreshButton').disabled=busy||familyRefreshing||(!activated&&!view.activation_ready);$('familyRefreshButton').title=activated?'查询 Apple 返回的家庭状态':'自动完成 iCloud 连接后读取家庭状态';if(!selectedFamily){$('familyDetail').textContent=activated?'点击右上角“读取家庭状态”，查询成员数量、当前角色和共享储存状态。':view.activation_ready?'账号已登录，正在自动完成 iCloud 连接并读取家庭状态。':'请先登录账号，再完成服务端 iCloud 连接以读取家庭状态。';}$('familyOrganizer').disabled=busy||!online||!!selectedFamily?.member||familyStale;$('familyAddButton').disabled=busy||!online||!view.control_ready||!!selectedFamily?.member||familyStale||!$('familyOrganizer').value;$('familyJoinStorageButton').disabled=busy||!activated||familyStale||!selectedFamily?.member||!selectedFamily?.storage_known||!selectedFamily?.storage_available||selectedFamily?.storage_participating;$('familyRemoveMember').disabled=busy||familyStale||!selectedFamily?.organizer;$('familyRemoveButton').disabled=busy||familyStale||!selectedFamily?.organizer||!$('familyRemoveMember').value;
+if(familyAuthAccount&&familyAuthAccount!==selectedAccount)resetFamilyAuth();$('familyPassword').disabled=busy||!online||familyStale;$('familyAuthForm').querySelector('button').disabled=busy||!online||familyStale||!view.control_ready;if(familyAccount&&familyAccount!==selectedAccount)renderFamily(null);const selectedFamily=familyAccount===selectedAccount?familyInfo:null,familyRefreshing=autoRefreshAttemptStatus(autoRefreshKey('family',view.family_checked_at))==='refreshing';$('familyRefreshButton').disabled=busy||familyRefreshing||(!activated&&!view.activation_ready);$('familyRefreshButton').title=activated?'查询 Apple 返回的家庭状态':'自动完成 iCloud 连接后读取家庭状态';if(!selectedFamily){$('familyDetail').textContent=activated?'点击右上角“读取家庭状态”，查询成员数量、当前角色和共享储存状态。':view.activation_ready?'账号已登录，正在自动完成 iCloud 连接并读取家庭状态。':'请先登录账号，再完成服务端 iCloud 连接以读取家庭状态。';}$('familyOrganizer').disabled=busy||!online||!!selectedFamily?.member||familyStale;$('familyAddButton').disabled=busy||!online||!view.control_ready||!!selectedFamily?.member||familyStale||!$('familyOrganizer').value;$('familyJoinStorageButton').disabled=busy||!activated||familyStale||!selectedFamily?.member||!selectedFamily?.storage_known||!selectedFamily?.storage_available||selectedFamily?.storage_participating;$('familyRemoveMember').disabled=busy||familyStale||!selectedFamily?.organizer;$('familyRemoveButton').disabled=busy||familyStale||!selectedFamily?.organizer||!$('familyRemoveMember').value;
 const hmeEligible=!!selectedFamily?.member&&!selectedFamily?.organizer&&selectedFamily?.storage_known&&selectedFamily?.storage_participating&&selectedFamily?.storage_available&&selectedFamily?.storage_enabled;$('hmeCard').hidden=!hmeEligible;const hmeReady=hmeEligible&&!familyStale&&online&&view.control_ready&&view.hide_my_email_available;$('hmeListButton').disabled=busy||!hmeReady;$('hmeGenerateButton').disabled=busy||!hmeReady||!!hmeInfo?.generation_limited;$('hmeGenerateButton').textContent=hmeInfo?.generation_limited?'已达 Apple 上限':'＋ 生成候选';$('hmeGenerateButton').title=hmeInfo?.generation_limited?'Apple 已确认当前账号达到地址数量上限；地址减少后点击“读取地址”重新核验。':'';$('hmeReserveButton').disabled=busy||!hmeReady||!hmeCandidate||!$('hmeCreateLabel').value.trim();if(hmeEligible&&!view.hide_my_email_available&&!hmeInfo)$('hmeSummary').textContent=online?'当前后台版本不支持隐私邮箱，请重新连接此账号完成升级。':'重新连接此账号后可读取隐私邮箱。';if(hmeAccount&&hmeAccount!==selectedAccount)resetHME();
 const forwardChoice=$('hmeForwardSelect').value,forwardCurrent=hmeInfo?.selected_forward_to||'';$('hmeForwardButton').disabled=busy||!hmeReady||!forwardChoice||forwardChoice.toLowerCase()===forwardCurrent.toLowerCase();
 $('hmeReachableEmail').disabled=busy||!hmeReady||!$('hmeReachableCodeForm').hidden;$('hmeReachableStartButton').disabled=busy||!hmeReady||!$('hmeReachableEmail').value.trim()||!$('hmeReachableCodeForm').hidden;$('hmeReachableStartButton').textContent=hmeReachableAction==='hme-reachable-start'?'正在发送…':'发送邮箱验证码';$('hmeReachablePassword').disabled=busy||!hmeReady;$('hmeReachableAuthForm').querySelector('button').disabled=busy||!hmeReady;$('hmeReachableCode').disabled=busy;$('hmeReachableCodeForm').querySelector('button').disabled=busy;
@@ -254,8 +256,9 @@ async function action(name,extra={},options={}){
 		return;
 	  }
 	  if(name==='family-add-self'&&result.stage==='family-password-required'){
-		notice(result.message||'请输入当前账号密码重新连接后再加入家庭',true);
-		openLogin('reconnect');
+		familyAuthAccount=requestedAccount;familyAuthOrganizer=extra.code||'';
+		$('familyAuthForm').hidden=false;$('familyAuthStatus').textContent=result.message||'请输入当前账号密码，验证后继续加入家庭。';
+		$('familyAuthForm').scrollIntoView?.({behavior:'smooth',block:'center'});
 		return;
 	  }
 	  if(name==='hme-reachable-start'&&['hme-reachable-auth-required','reconnect-required'].includes(result.stage)){
@@ -272,6 +275,7 @@ async function action(name,extra={},options={}){
       if(name==='storage-purchase')$('planSummary').textContent=(result.message||'购买请求未完成')+detail;
       throw new Error((result.message||'操作未完成')+detail);
     }
+    if(name==='family-add-self')resetFamilyAuth();
     if(result.activation){activationInfo=result.activation;activationAccount=selectedAccount;if(current&&result.activation.completed){current.icloud_activated=true;current.activation_ready=false;}renderActivation(current);}
     if(result.store_authentication?.ready){$('storeAuthSummary').textContent='购买会话认证通过 · 当前后台会话可用 · 临时会话不会持久化';$('storeAuthForm').hidden=true;}
     if(result.storage){const checkedAt=new Date().toISOString();if(current){current.storage=result.storage;current.storage_checked_at=checkedAt;current.storage_stale=false;}renderStorage(result.storage,{checkedAt,stale:false});}
@@ -307,8 +311,8 @@ async function action(name,extra={},options={}){
     if(options.autoKey)autoRefreshState.delete(options.autoKey);
     if(result.code)showCode(result);else if(!options.silent)notice(result.message||'操作已完成');
     await poll();
-  }catch(error){if(reachableAction&&requestedAccount===selectedAccount)reachableStatus(error.message,true);if(options.autoKey){autoRefreshState.set(options.autoKey,'failed');markAutoRefreshAttempt(options.autoKey,'failed');}if(loginVerificationAction){$('loginError').textContent=error.message;$('loginError').hidden=false;}else if(!options.silent)notice(error.message,true);}
-  finally{busy=false;if(reachableAction)hmeReachableAction='';if(name==='activation-connect')releaseAutoRefreshLease(requestedAccount);document.body.classList.remove('busy');if(familyAction)$('familyCard').classList.remove('is-loading');if(hmeAction)$('hmeCard').classList.remove('is-loading');if(current)render(current);if(reachableAction&&requestedAccount===selectedAccount){if(!$('hmeReachableAuthForm').hidden)$('hmeReachablePassword').focus();else if(!$('hmeReachableCodeForm').hidden)$('hmeReachableCode').focus();}}
+  }catch(error){if(name==='family-add-self'&&familyAuthAccount===requestedAccount&&requestedAccount===selectedAccount)$('familyAuthStatus').textContent=error.message;if(reachableAction&&requestedAccount===selectedAccount)reachableStatus(error.message,true);if(options.autoKey){autoRefreshState.set(options.autoKey,'failed');markAutoRefreshAttempt(options.autoKey,'failed');}if(loginVerificationAction){$('loginError').textContent=error.message;$('loginError').hidden=false;}else if(!options.silent)notice(error.message,true);}
+  finally{busy=false;if(reachableAction)hmeReachableAction='';if(name==='activation-connect')releaseAutoRefreshLease(requestedAccount);document.body.classList.remove('busy');if(familyAction)$('familyCard').classList.remove('is-loading');if(hmeAction)$('hmeCard').classList.remove('is-loading');if(current)render(current);if(name==='family-add-self'&&requestedAccount===selectedAccount&&!$('familyAuthForm').hidden)$('familyPassword').focus();if(reachableAction&&requestedAccount===selectedAccount){if(!$('hmeReachableAuthForm').hidden)$('hmeReachablePassword').focus();else if(!$('hmeReachableCodeForm').hidden)$('hmeReachableCode').focus();}}
 }
 $('reloadView').addEventListener('click',poll);$('codeButton').addEventListener('click',()=>action('code'));$('devicesButton').addEventListener('click',()=>action('devices'));$('devicesReconnectButton').addEventListener('click',()=>openLogin('reconnect'));$('renewButton').addEventListener('click',()=>action('validate-account'));
 $('storageButton').addEventListener('click',()=>action('storage-info'));
@@ -316,9 +320,18 @@ $('activationCheckButton').addEventListener('click',()=>action('activation-conne
 $('activationAcceptButton').addEventListener('click',()=>action('activation-connect'));
 $('planButton').addEventListener('click',()=>action('storage-plan'));
 $('familyRefreshButton').addEventListener('click',()=>action('family-info'));
-$('familyOrganizer').addEventListener('change',()=>{if(current)render(current);});
+$('familyOrganizer').addEventListener('change',()=>{resetFamilyAuth();if(current)render(current);});
 $('familyRemoveMember').addEventListener('change',()=>{if(current)render(current);});
 $('familyAddButton').addEventListener('click',()=>{const organizer=$('familyOrganizer').value;if(!organizer)return;const label=$('familyOrganizer').selectedOptions[0]?.textContent||organizer;if(!confirm('将当前账号加入 '+label+' 的家庭，并在可用时启用共享 iCloud+？购买共享和位置共享保持关闭。'))return;action('family-add-self',{code:organizer});});
+$('familyAuthForm').addEventListener('submit',async event=>{
+  event.preventDefault();if(busy)return;
+  if(familyAuthAccount!==selectedAccount||!familyAuthOrganizer||familyAuthOrganizer!==$('familyOrganizer').value){resetFamilyAuth();return;}
+  if(familyStale||familyInfo?.member||!current?.status?.running||!current?.status?.authenticated||!current?.control_ready)return;
+  const credentials={code:familyAuthOrganizer,password:$('familyPassword').value};$('familyPassword').value='';
+  if(!credentials.password)return;
+  $('familyAuthStatus').textContent='正在验证并加入家庭，请稍候…';
+  try{await action('family-add-self',credentials);}finally{credentials.password='';}
+});
 $('familyJoinStorageButton').addEventListener('click',()=>action('family-join-storage'));
 $('familyRemoveButton').addEventListener('click',()=>{const target=$('familyRemoveMember').value;if(!target)return;const label=$('familyRemoveMember').selectedOptions[0]?.textContent||target;if(!confirm('确认将 '+label+' 移出当前家庭？该账号会立即失去共享 iCloud+，之后仍可重新拉入。购买共享和位置共享不会开启。'))return;action('family-remove-member',{code:target});});
 $('hmeListButton').addEventListener('click',()=>action('hme-list'));
@@ -383,4 +396,4 @@ function applyRoute(){
   if(current)renderLogin(current);
 }
 window.addEventListener('hashchange',applyRoute);applyRoute();
-requestAnimationFrame(()=>requestAnimationFrame(()=>document.body.classList.add('ui-ready')));poll();setInterval(poll,2500);setInterval(tickCode,500);window.addEventListener('pagehide',()=>{clearCode();$('hmeReachablePassword').value='';$('password').value='';$('smsCode').value='';$('pairingCode').value='';});
+requestAnimationFrame(()=>requestAnimationFrame(()=>document.body.classList.add('ui-ready')));poll();setInterval(poll,2500);setInterval(tickCode,500);window.addEventListener('pagehide',()=>{clearCode();resetFamilyAuth();$('hmeReachablePassword').value='';$('password').value='';$('smsCode').value='';$('pairingCode').value='';});
