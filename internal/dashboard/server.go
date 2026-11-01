@@ -352,11 +352,17 @@ func (s *Server) readStatusFrom(dir string) Status {
 		if status.State == "online" {
 			status.State = "stopped"
 		}
-		// Recognize a repair response left by an older worker, without retrying
-		// authentication or changing the account's saved state.
-		if status.State == "failed" && lastProcessError(filepath.Join(dir, "daemon.err.log")) == accountRepairMessage {
-			status.State = "account_repair_required"
-			status.VerificationRequired = false
+		// Restore known authentication failures without retrying authentication
+		// or changing the account's saved state.
+		if status.State == "failed" {
+			switch lastProcessError(filepath.Join(dir, "daemon.err.log")) {
+			case accountRepairMessage:
+				status.State = "account_repair_required"
+				status.VerificationRequired = false
+			case accountInactiveMessage:
+				status.State = "account_inactive"
+				status.VerificationRequired = false
+			}
 		}
 	}
 	return status
@@ -858,6 +864,9 @@ func (s *Server) snapshotFor(ctx context.Context, id string) view {
 	if result.Status.State == "account_repair_required" {
 		result.Message = accountRepairMessage
 	}
+	if result.Status.State == "account_inactive" {
+		result.Message = accountInactiveMessage
+	}
 	result.Accounts = s.listAccounts(ctx)
 	result.Selected = id
 	if account != nil {
@@ -1036,7 +1045,7 @@ func (s *Server) startInMode(ctx context.Context, dir string, creds credentials,
 		if err := command.Wait(); err != nil {
 			message := "后台异常停止，请重新连接"
 			if detail := lastProcessError(diagnostic.Name()); detail != "" {
-				if detail == accountRepairMessage {
+				if detail == accountRepairMessage || detail == accountInactiveMessage {
 					message = detail
 				} else {
 					message += "：" + detail
@@ -1052,6 +1061,7 @@ func (s *Server) startInMode(ctx context.Context, dir string, creds credentials,
 }
 
 const accountRepairMessage = "Apple 返回了本客户端尚未支持的认证后续步骤（repair），当前登录尚未完成。这不代表账号官网存在待修复事项；即使官网能正常登录，本客户端仍可能需要适配。请选择此账号重新连接以获取诊断状态。"
+const accountInactiveMessage = "Apple 提示此账号未激活，当前登录尚未完成。请通过 Apple 官方账户恢复渠道申请恢复访问，必要时联系 Apple 支持；恢复后再重新连接。该账号的设备身份仍保留。"
 
 func lastProcessError(path string) string {
 	data, err := os.ReadFile(path)
@@ -1066,6 +1076,8 @@ func lastProcessError(path string) string {
 		}
 		// Never forward arbitrary stderr (which can contain credentials).
 		switch {
+		case strings.Contains(line, "gsa:") && strings.Contains(line, "ec=-20755)"):
+			return accountInactiveMessage
 		case strings.Contains(line, "gsa: authentication continuation requires client support (repair)"), strings.Contains(line, "gsa: Apple account repair required"), strings.Contains(line, `gsa: unsupported authentication continuation "repair"`):
 			return accountRepairMessage
 		case strings.Contains(line, "a provisioned device state is required"):

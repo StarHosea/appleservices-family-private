@@ -256,6 +256,33 @@ func TestLastProcessErrorMapsRejectedPasswordWithoutExposingLog(t *testing.T) {
 	}
 }
 
+func TestDashboardRestoresInactiveAccountStatus(t *testing.T) {
+	dir := t.TempDir()
+	server, err := New(Config{Dir: dir, Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.listener.Close()
+	data, _ := json.Marshal(Status{State: "failed", FailureStage: "signing_in", VerificationRequired: true})
+	if err := os.WriteFile(filepath.Join(dir, "runtime.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	line := "trusted-device: gsa: init rejected (ec=-20755) — server said: This Apple Account is not active. private-account-value"
+	if err := os.WriteFile(filepath.Join(dir, "daemon.err.log"), []byte(line+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	view := server.snapshot(context.Background())
+	if view.Status.State != "account_inactive" || view.Message != accountInactiveMessage {
+		t.Fatalf("inactive account guidance lost after restart: %q, %q", view.Status.State, view.Message)
+	}
+	if view.Status.Running || view.Status.Authenticated || view.Status.VerificationRequired || view.Status.FailureStage != "signing_in" {
+		t.Fatal("inactive account shown as authenticated or awaiting verification")
+	}
+	if strings.Contains(view.Message, "private-account-value") || strings.Contains(view.Message, "-20755") {
+		t.Fatal("raw diagnostic exposed")
+	}
+}
+
 func TestLastProcessErrorMapsSMSRateLimitWithoutExposingLog(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "worker.err")
 	line := "trusted-device: gsa: fetch boot_args page: status 423; ec=-22981; tooManyCodesSent=true; noTrustedDevices=true"
