@@ -30,6 +30,18 @@ func (s fileStore) SavePendingRepair(appleID string, pending *gsa.PendingRepair)
 	return nil
 }
 
+func (s fileStore) LoadPendingRepair() (*gsa.PendingRepair, error) {
+	data, err := os.ReadFile(filepath.Join(s.dir, "gsa-repair.json"))
+	if err != nil {
+		return nil, errors.New("pending authentication checkpoint is unavailable")
+	}
+	var pending gsa.PendingRepair
+	if len(data) > 2<<20 || json.Unmarshal(data, &pending) != nil {
+		return nil, errors.New("pending authentication checkpoint is invalid")
+	}
+	return &pending, nil
+}
+
 func (s fileStore) SaveAcceptedICloud(appleID string, accepted appleservices.RestoredICloudSession) error {
 	saved, err := s.LoadSession()
 	if err != nil || saved == nil || !strings.EqualFold(saved.AppleID, appleID) || saved.DSID == "" || saved.DSID != accepted.ADSID ||

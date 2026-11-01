@@ -368,6 +368,55 @@ func TestSessionSaveFailureDoesNotReturnSuccess(t *testing.T) {
 
 type verifiedBackend struct{ *fakeBackend }
 
+type pendingRepairBackend struct {
+	*fakeBackend
+	issuePET bool
+}
+
+func (b *pendingRepairBackend) ResumeRepair(string, *gsa.PendingRepair) (*gsa.LoginResult, error) {
+	result := testResult(true)
+	result.RequiresSMS = true
+	return result, nil
+}
+
+func (b *pendingRepairBackend) VerifiedLoginResult() *gsa.LoginResult {
+	if !b.issuePET || len(b.submits) == 0 {
+		return nil
+	}
+	return testResult(false)
+}
+
+func TestResumeRepairRequiresApplePETAndNeverSubmitsAnEmptyPassword(t *testing.T) {
+	for _, issuePET := range []bool{false, true} {
+		store := &memoryStore{}
+		backend := &pendingRepairBackend{fakeBackend: &fakeBackend{}, issuePET: issuePET}
+		opts := testOptions(backend.fakeBackend, testDelegate)
+		opts = append(opts, func(o *options) {
+			o.newBackend = func(gsa.AnisetteProvider, *gsa.Session) loginBackend { return backend }
+		})
+		login, err := ResumePendingRepair("owner@example.test", store, &gsa.PendingRepair{}, opts...)
+		if err != nil || !login.NeedsTwoFactor() || !login.RequiresSMS() {
+			t.Fatal("pending SMS repair was not exposed", err)
+		}
+		err = login.SubmitCode(SMS, "123456")
+		if backend.calls != 0 {
+			t.Fatal("resumed challenge attempted password authentication")
+		}
+		if !issuePET {
+			if err == nil || !login.NeedsTwoFactor() || store.session != nil {
+				t.Fatal("code response without PET completed authentication")
+			}
+			continue
+		}
+		if err != nil || login.NeedsTwoFactor() || store.session == nil {
+			t.Fatal("Apple-verified challenge was not checkpointed", err)
+		}
+		if _, err = login.Client(); err != nil {
+			t.Fatal("verified challenge did not complete iCloud exchange", err)
+		}
+	}
+}
+
 func (b *verifiedBackend) VerifiedLoginResult() *gsa.LoginResult {
 	if len(b.submits) == 0 {
 		return nil

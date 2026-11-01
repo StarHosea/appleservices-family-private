@@ -244,6 +244,8 @@ type smsSubmitBody struct {
 var bootArgsScriptRe = regexp.MustCompile(`(?is)<script\b[^>]*\bclass\s*=\s*["'][^"']*\bboot_args\b[^"']*["'][^>]*>(.*?)</script\s*>`)
 
 type bootArgs struct {
+	PhoneNumber         phoneNumberID   `json:"phoneNumber"`
+	TrustedPhoneNumber  phoneNumberID   `json:"trustedPhoneNumber"`
 	TrustedPhoneNumbers []phoneNumberID `json:"trustedPhoneNumbers"`
 	Direct              struct {
 		PhoneNumberVerification struct {
@@ -256,6 +258,10 @@ type bootArgs struct {
 }
 
 func (c *Client) fetchTrustedPhoneID(dsid, idmsToken string) (int, error) {
+	return c.fetchPhoneID(dsid, idmsToken, false)
+}
+
+func (c *Client) fetchPhoneID(dsid, idmsToken string, repair bool) (int, error) {
 	headers, err := c.twoFactorHeaders(dsid, idmsToken)
 	if err != nil {
 		return 0, err
@@ -283,9 +289,20 @@ func (c *Client) fetchTrustedPhoneID(dsid, idmsToken string) (int, error) {
 	if result.StatusCode != 200 && result.StatusCode != 201 {
 		return 0, secondFactorResponseError("fetch boot_args page", result.StatusCode, result.Body)
 	}
+	if repair && !isRepairSMSChallenge(result.Body) {
+		blocked := secondFactorResponseError("repair SMS discovery", result.StatusCode, result.Body).(*SecondFactorError)
+		if blocked.TooManyCodesSent || blocked.TooManyCodesValidated || blocked.SecurityCodeLocked {
+			return 0, blocked
+		}
+		return 0, ErrAccountRepairRequired
+	}
+	id, err := parseTrustedPhoneID(result.Body)
+	if err != nil {
+		return 0, err
+	}
 	c.smsCodeAlreadySent = result.StatusCode == 201
-
-	return parseTrustedPhoneID(result.Body)
+	c.smsPhoneID = id
+	return id, nil
 }
 
 func parseTrustedPhoneID(body []byte) (int, error) {
@@ -303,6 +320,12 @@ func parseTrustedPhoneID(body []byte) (int, error) {
 	if id > 0 {
 		return id, nil
 	}
+	if args.TrustedPhoneNumber.ID > 0 {
+		return args.TrustedPhoneNumber.ID, nil
+	}
+	if args.PhoneNumber.ID > 0 {
+		return args.PhoneNumber.ID, nil
+	}
 	for _, phone := range args.TrustedPhoneNumbers {
 		if phone.ID > 0 {
 			return phone.ID, nil
@@ -317,12 +340,16 @@ func parseTrustedPhoneID(body []byte) (int, error) {
 }
 
 func (c *Client) RequestSMSCode(dsid, idmsToken string) error {
-	phoneID, err := c.fetchTrustedPhoneID(dsid, idmsToken)
-	if err != nil {
-		return err
+	phoneID := c.smsPhoneID
+	if phoneID == 0 {
+		var err error
+		phoneID, err = c.fetchTrustedPhoneID(dsid, idmsToken)
+		if err != nil {
+			return err
+		}
 	}
 	if c.smsCodeAlreadySent {
-		c.smsPhoneID = phoneID
+		c.smsCodeAlreadySent = false
 		return nil
 	}
 	return c.RequestSMSCodeForPhone(dsid, idmsToken, phoneID)

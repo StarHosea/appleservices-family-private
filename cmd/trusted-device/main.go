@@ -65,6 +65,7 @@ func run() (runErr error) {
 	controlAPI := flag.Bool("control-api", false, "enable authenticated local dashboard control")
 	guiAuth := flag.Bool("gui-auth", false, "complete initial SMS verification through the dashboard")
 	resumeSession := flag.Bool("resume-session", false, "restore the account-bound GSA and accepted iCloud sessions without a password")
+	resumeRepair := flag.Bool("resume-repair", false, "continue an account-bound pending SMS repair challenge without a password")
 	flag.Parse()
 	if *background {
 		*controlAPI = true
@@ -162,7 +163,10 @@ func run() (runErr error) {
 		return nil
 	}
 	appleID, password := os.Getenv("APPLESERVICES_APPLEID"), os.Getenv("APPLESERVICES_PASSWORD")
-	if appleID == "" || (!*resumeSession && password == "") {
+	if *resumeSession && *resumeRepair {
+		return errors.New("resume-session and resume-repair cannot be combined")
+	}
+	if appleID == "" || (!*resumeSession && !*resumeRepair && password == "") {
 		return errors.New("APPLESERVICES_APPLEID and APPLESERVICES_PASSWORD are required")
 	}
 	os.Unsetenv("APPLESERVICES_APPLEID")
@@ -255,6 +259,9 @@ func run() (runErr error) {
 		serial = "AS" + strings.ToUpper(fmt.Sprintf("%x", identity[:5]))
 	}
 	options := []appleservices.Option{appleservices.WithAnisetteServers(*server), appleservices.WithDeviceSerialNumber(serial), appleservices.WithPushToken(push.State().Token)}
+	if *method != "sms-existing" && *method != "circle" {
+		options = append(options, appleservices.WithRepairSMSDiscovery())
+	}
 	var localADI *nativeadi.Client
 	if *useNativeADI {
 		library, err := filepath.Abs(*adiLibrary)
@@ -297,7 +304,16 @@ func run() (runErr error) {
 		return err
 	}
 	var login *appleservices.Login
-	if *resumeSession {
+	if *resumeRepair {
+		pending, loadErr := store.LoadPendingRepair()
+		if loadErr != nil {
+			return loadErr
+		}
+		if *method == "sms-existing" && pending.SMS == nil {
+			return errors.New("pending authentication has no saved SMS challenge; no new code was requested")
+		}
+		login, err = appleservices.ResumePendingRepair(appleID, store, pending, options...)
+	} else if *resumeSession {
 		accepted, loadErr := store.LoadAcceptedICloud()
 		if loadErr != nil {
 			return errors.New("saved login session cannot be restored; reconnect with the current password")
@@ -311,6 +327,9 @@ func run() (runErr error) {
 	}
 	if err != nil {
 		return err
+	}
+	if login.RequiresSMS() && *method != "sms-existing" {
+		*method = "sms"
 	}
 	input := bufio.NewReader(os.Stdin)
 	if login.NeedsTwoFactor() && *method == "circle" {

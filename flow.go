@@ -99,6 +99,11 @@ func prepareLogin(creds Credentials, store Store, requirePassword bool, opts ...
 		l.anisette = identityAnisette{provider: l.anisette, serial: l.serialNumber}
 	}
 	l.backend = o.newBackend(l.anisette, gsess)
+	if o.repairSMSDiscovery {
+		if backend, ok := l.backend.(interface{ EnableRepairSMSDiscovery() }); ok {
+			backend.EnableRepairSMSDiscovery()
+		}
+	}
 	if l.serialNumber != "" {
 		// Keep the worker's AppleIDSettings client identity selectable for
 		// controlled comparisons. A delegate refusal alone does not identify
@@ -210,6 +215,36 @@ func (l *Login) authenticate() error {
 
 func (l *Login) NeedsTwoFactor() bool { return l.needsTwoFactor }
 
+func (l *Login) RequiresSMS() bool {
+	return l.needsTwoFactor && l.result != nil && l.result.RequiresSMS
+}
+
+// ResumePendingRepair continues an account-bound challenge without a password.
+// It never establishes authentication until Apple accepts the code and issues
+// a PET. The original successful session remains separate from this checkpoint.
+func ResumePendingRepair(appleID string, store Store, pending *gsa.PendingRepair, opts ...Option) (*Login, error) {
+	l, _, err := prepareLogin(Credentials{AppleID: appleID}, store, false, opts...)
+	if err != nil {
+		return nil, err
+	}
+	backend, ok := l.backend.(interface {
+		ResumeRepair(string, *gsa.PendingRepair) (*gsa.LoginResult, error)
+	})
+	if !ok {
+		return nil, errors.New("appleservices: backend cannot resume a pending repair challenge")
+	}
+	result, err := backend.ResumeRepair(l.creds.AppleID, pending)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil || !result.NeedsTwoFactor || !result.RequiresSMS || spdString(result.SessionPayload, "adsid") == "" || spdString(result.SessionPayload, "GsIdmsToken") == "" {
+		return nil, errors.New("appleservices: pending repair did not return an SMS challenge")
+	}
+	l.result, l.adsid, l.idmsToken = result, spdString(result.SessionPayload, "adsid"), spdString(result.SessionPayload, "GsIdmsToken")
+	l.needsTwoFactor = true
+	return l, nil
+}
+
 // BeginAccountValidation starts a fresh password-authenticated challenge for
 // an already configured account. It is used by the dashboard when Apple asks
 // for a device code again; it never opens or drives the official client.
@@ -294,6 +329,9 @@ func (l *Login) SubmitCode(method TwoFactorMethod, code string) error {
 			}
 			return l.checkpointVerifiedGSA()
 		}
+	}
+	if l.creds.Password == "" {
+		return errors.New("appleservices: Apple did not issue a verified session; reconnect with the current password")
 	}
 	if err := l.authenticate(); err != nil {
 		return err

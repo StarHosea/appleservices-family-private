@@ -64,12 +64,20 @@ type RestoredICloudSession struct {
 type Option func(*options)
 
 type options struct {
-	anisette      gsa.AnisetteProvider
-	newBackend    backendFactory
-	fetchDelegate delegateFetcher
-	servers       []string
-	serialNumber  string
-	pushToken     []byte
+	repairSMSDiscovery bool
+	anisette           gsa.AnisetteProvider
+	newBackend         backendFactory
+	fetchDelegate      delegateFetcher
+	servers            []string
+	serialNumber       string
+	pushToken          []byte
+}
+
+// WithRepairSMSDiscovery allows Apple's repair continuation to discover a
+// supported SMS challenge. Apple's metadata request may itself send a code.
+// Omit this option when the caller promised not to request a new SMS.
+func WithRepairSMSDiscovery() Option {
+	return func(o *options) { o.repairSMSDiscovery = true }
 }
 
 // WithDeviceSerialNumber identifies this installation in account-device calls.

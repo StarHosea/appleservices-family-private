@@ -40,7 +40,10 @@ type Client struct {
 	pushToken             []byte
 	nativeDevice          bool
 	requestID             string
+	repairSMSDiscovery    bool
 }
+
+func (c *Client) EnableRepairSMSDiscovery() { c.repairSMSDiscovery = true }
 
 func (c *Client) EnableNativeDeviceAuthentication() { c.nativeDevice = true }
 
@@ -88,6 +91,7 @@ type LoginResult struct {
 	NeedsTwoFactor  bool
 	TwoFactorMethod string
 	SessionPayload  map[string]any
+	RequiresSMS     bool
 }
 
 func caseInsensitiveLookup(headers map[string]string, name string) string {
@@ -443,6 +447,16 @@ func (c *Client) Login(username, password string) (*LoginResult, error) {
 	au, _ := status["au"].(string)
 	if err := checkAuthenticationContinuation(au); err != nil {
 		if errors.Is(err, ErrAccountRepairRequired) {
+			if c.repairSMSDiscovery {
+				if result, discoveryErr := c.continueRepairSMS(sessionPayload); discoveryErr == nil {
+					return result, nil
+				} else {
+					var secondFactor *SecondFactorError
+					if errors.As(discoveryErr, &secondFactor) && (secondFactor.TooManyCodesSent || secondFactor.TooManyCodesValidated || secondFactor.SecurityCodeLocked) {
+						return nil, discoveryErr
+					}
+				}
+			}
 			return nil, c.accountRepairError(username, status, sessionPayload)
 		}
 		return nil, err
