@@ -83,31 +83,32 @@ type Status struct {
 	FailureStage         string    `json:"failure_stage,omitempty"`
 }
 type view struct {
-	Status               Status                  `json:"status"`
-	Devices              []control.Device        `json:"devices"`
-	DevicesCheckedAt     time.Time               `json:"devices_checked_at"`
-	DevicesStale         bool                    `json:"devices_stale"`
-	Pending              *control.Pending        `json:"pending"`
-	CodeReady            bool                    `json:"code_ready"`
-	ControlReady         bool                    `json:"control_ready"`
-	Launching            bool                    `json:"launching"`
-	Message              string                  `json:"message"`
-	Account              string                  `json:"account"`
-	LoginAccount         string                  `json:"login_account,omitempty"`
-	Accounts             []AccountView           `json:"accounts,omitempty"`
-	Selected             string                  `json:"selected,omitempty"`
-	ICloudActivated      bool                    `json:"icloud_activated"`
-	Family               *control.FamilyInfo     `json:"family,omitempty"`
-	FamilyCheckedAt      string                  `json:"family_checked_at,omitempty"`
-	FamilyStale          bool                    `json:"family_stale"`
-	Storage              *icloud.StorageInfo     `json:"storage,omitempty"`
-	StorageCheckedAt     string                  `json:"storage_checked_at,omitempty"`
-	StorageStale         bool                    `json:"storage_stale"`
-	StoragePlan          *icloud.StoragePlanInfo `json:"storage_plan,omitempty"`
-	StoragePlanCheckedAt string                  `json:"storage_plan_checked_at,omitempty"`
-	StoragePlanStale     bool                    `json:"storage_plan_stale"`
-	HideMyEmailAvailable bool                    `json:"hide_my_email_available"`
-	ActivationReady      bool                    `json:"activation_ready"`
+	FamilyAuthentication *control.FamilyAuthentication `json:"family_authentication,omitempty"`
+	Status               Status                        `json:"status"`
+	Devices              []control.Device              `json:"devices"`
+	DevicesCheckedAt     time.Time                     `json:"devices_checked_at"`
+	DevicesStale         bool                          `json:"devices_stale"`
+	Pending              *control.Pending              `json:"pending"`
+	CodeReady            bool                          `json:"code_ready"`
+	ControlReady         bool                          `json:"control_ready"`
+	Launching            bool                          `json:"launching"`
+	Message              string                        `json:"message"`
+	Account              string                        `json:"account"`
+	LoginAccount         string                        `json:"login_account,omitempty"`
+	Accounts             []AccountView                 `json:"accounts,omitempty"`
+	Selected             string                        `json:"selected,omitempty"`
+	ICloudActivated      bool                          `json:"icloud_activated"`
+	Family               *control.FamilyInfo           `json:"family,omitempty"`
+	FamilyCheckedAt      string                        `json:"family_checked_at,omitempty"`
+	FamilyStale          bool                          `json:"family_stale"`
+	Storage              *icloud.StorageInfo           `json:"storage,omitempty"`
+	StorageCheckedAt     string                        `json:"storage_checked_at,omitempty"`
+	StorageStale         bool                          `json:"storage_stale"`
+	StoragePlan          *icloud.StoragePlanInfo       `json:"storage_plan,omitempty"`
+	StoragePlanCheckedAt string                        `json:"storage_plan_checked_at,omitempty"`
+	StoragePlanStale     bool                          `json:"storage_plan_stale"`
+	HideMyEmailAvailable bool                          `json:"hide_my_email_available"`
+	ActivationReady      bool                          `json:"activation_ready"`
 }
 type credentials struct {
 	AppleID   string `json:"apple_id"`
@@ -498,7 +499,9 @@ func (s *Server) callFor(ctx context.Context, dir, path string, body any, result
 	if action, ok := body.(control.Action); ok {
 		if action.Action == "storage-skill-auth-file" {
 			timeout = 3*time.Minute + 5*time.Second
-		} else if action.Action == "family-add-self" || strings.HasPrefix(action.Action, "hme-") {
+		} else if action.Action == "family-add-self" {
+			timeout = 220 * time.Second
+		} else if strings.HasPrefix(action.Action, "hme-") {
 			timeout = 2*time.Minute + 5*time.Second
 		}
 	}
@@ -915,6 +918,7 @@ func (s *Server) snapshotFor(ctx context.Context, id string) view {
 				result.Devices = live.Devices
 			}
 			result.Pending = live.Pending
+			result.FamilyAuthentication = live.FamilyAuthentication
 			result.CodeReady = live.CodeReady
 			result.HideMyEmailAvailable = slices.Contains(live.Capabilities, "hide-my-email")
 			result.ControlReady = true

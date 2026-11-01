@@ -984,7 +984,11 @@ func run() (runErr error) {
 			if info, statErr := os.Stat(helper); statErr != nil || !info.Mode().IsRegular() {
 				return control.Result{Message: "家庭工具不可用", Stage: "family-worker"}
 			}
-			queryCtx, done := context.WithTimeout(actionCtx, 105*time.Second)
+			familyTimeout := 105 * time.Second
+			if action == "family-add-self" {
+				familyTimeout = interactiveFamilyTimeout
+			}
+			queryCtx, done := context.WithTimeout(actionCtx, familyTimeout)
 			defer done()
 			args := []string{"-dir", *dir, "-safe-json"}
 			env := []string(nil)
@@ -1009,7 +1013,14 @@ func run() (runErr error) {
 				env = []string{"APPLESERVICES_TARGET_PASSWORD=" + familyPassword}
 				message, stage = "池内账号已加入家庭并通过双端回读", "family-added"
 			}
-			output, execErr := runFamilyHelper(queryCtx, helper, args, env)
+			var output string
+			if action == "family-add-self" && panel != nil {
+				var finishFamilyAuthentication func()
+				output, execErr, finishFamilyAuthentication = runInteractiveFamilyHelper(queryCtx, panel, strings.TrimSpace(commandCode), helper, args, env)
+				defer finishFamilyAuthentication()
+			} else {
+				output, execErr = runFamilyHelper(queryCtx, helper, args, env)
+			}
 			if execErr != nil {
 				return control.Result{Message: "家庭操作未完成：" + lastNonEmptyLine(output), Stage: "family-action"}
 			}

@@ -39,11 +39,12 @@ type Pending struct {
 	ReceivedAt time.Time `json:"received_at"`
 }
 type View struct {
-	Status       json.RawMessage `json:"status"`
-	Devices      []Device        `json:"devices"`
-	Pending      *Pending        `json:"pending"`
-	CodeReady    bool            `json:"code_ready"`
-	Capabilities []string        `json:"capabilities,omitempty"`
+	FamilyAuthentication *FamilyAuthentication `json:"family_authentication,omitempty"`
+	Status               json.RawMessage       `json:"status"`
+	Devices              []Device              `json:"devices"`
+	Pending              *Pending              `json:"pending"`
+	CodeReady            bool                  `json:"code_ready"`
+	Capabilities         []string              `json:"capabilities,omitempty"`
 }
 type Action struct {
 	Action    string `json:"action"`
@@ -126,15 +127,17 @@ type Command struct {
 	Reply   chan Result
 }
 type Server struct {
-	Record   Record
-	Commands chan Command
-	dir      string
-	listener net.Listener
-	http     *http.Server
-	mu       sync.Mutex
-	devices  []Device
-	pending  *Pending
-	ready    bool
+	Record      Record
+	Commands    chan Command
+	dir         string
+	listener    net.Listener
+	http        *http.Server
+	mu          sync.Mutex
+	devices     []Device
+	pending     *Pending
+	ready       bool
+	familyAuth  *FamilyAuthentication
+	familyInput chan FamilyAuthenticationInput
 }
 
 func New(dir string) (*Server, error) {
@@ -191,7 +194,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.mu.Lock()
-		view := View{Status: data, Devices: s.devices, Pending: s.pending, CodeReady: s.ready, Capabilities: []string{"hide-my-email"}}
+		view := View{FamilyAuthentication: s.familyAuth, Status: data, Devices: s.devices, Pending: s.pending, CodeReady: s.ready, Capabilities: []string{"hide-my-email"}}
 		s.mu.Unlock()
 		json.NewEncoder(w).Encode(view)
 		return
@@ -208,6 +211,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"message":"invalid action"}`, 400)
 		return
 	}
+	if action.Action == "family-auth-sms" || action.Action == "family-auth-code" || action.Action == "family-auth-cancel" {
+		json.NewEncoder(w).Encode(s.familyAuthenticationAction(action))
+		return
+	}
 	switch action.Action {
 	case "icloud-checkpoint", "code", "devices", "refresh", "validate-account", "allow", "deny", "submit-sms", "resend-sms", "submit-account-code", "storage-info", "storage-plan", "storage-authenticate", "storage-skill-auth-local", "storage-skill-auth-file", "storage-skill-purchase-us", "storage-preview", "storage-purchase", "storage-probe", "storage-buy", "family-info", "family-add-self", "family-join-storage", "hme-list", "hme-authenticate", "hme-accept-terms", "hme-generate", "hme-reserve", "hme-forward", "hme-reachable-start", "hme-reachable-verify", "hme-update", "hme-deactivate", "hme-reactivate", "hme-delete", "submit-pairing":
 	default:
@@ -217,7 +224,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	timeout := 90 * time.Second
 	if action.Action == "storage-skill-auth-file" {
 		timeout = 3 * time.Minute
-	} else if action.Action == "family-add-self" || strings.HasPrefix(action.Action, "hme-") {
+	} else if action.Action == "family-add-self" {
+		timeout = 215 * time.Second
+	} else if strings.HasPrefix(action.Action, "hme-") {
 		timeout = 2 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)

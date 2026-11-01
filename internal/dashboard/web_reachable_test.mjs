@@ -187,3 +187,38 @@ test('stale family state cannot submit an inline join and an error never retries
   assert.match(f.get('familyAuthStatus').textContent,/本次操作未完成/);
   assert.equal(f.get('familyAuthForm').hidden,false);
 });
+
+test('family repair waits for an explicit SMS click even while the join request is busy',async()=>{
+  const f=fixture(()=>({ok:true,message:'正在处理'}));
+  f.run("busy=true;renderFamilyVerification({request_id:'challenge-a',organizer:'organizer-a',stage:'repair-consent',expires_at:new Date(Date.now()+60000).toISOString()})");
+  assert.equal(f.requests.length,0,'polling automatically requested SMS');
+  assert.equal(f.get('familyVerificationPanel').hidden,false);
+  assert.equal(f.get('familyVerificationSMS').hidden,false);
+  assert.equal(f.get('familyVerificationSMS').disabled,false);
+  await f.get('familyVerificationSMS').listeners.click();
+  assert.equal(f.requests.length,1);
+  assert.equal(f.requests[0].action,'family-auth-sms');
+  assert.equal(f.requests[0].request_id,'challenge-a');
+  await f.get('familyVerificationSMS').listeners.click();
+  assert.equal(f.requests.length,1,'duplicate SMS click was sent');
+});
+
+test('family repair submits a cleared code to the same challenge and rejects expired or changed-account input',async()=>{
+  const f=fixture(()=>({ok:true}));
+  f.run("busy=true;renderFamilyVerification({request_id:'challenge-a',stage:'sms-code',expires_at:new Date(Date.now()+60000).toISOString()})");
+  f.get('familyVerificationCode').value='123456';
+  f.get('familyVerificationCodeForm').listeners.submit({preventDefault(){}});
+  assert.equal(f.get('familyVerificationCode').value,'');
+  await settle();
+  assert.equal(f.requests.length,1);
+  assert.equal(f.requests[0].code,'123456');
+  assert.equal(f.requests[0].request_id,'challenge-a');
+  f.run("renderFamilyVerification({request_id:'expired',stage:'repair-consent',expires_at:new Date(Date.now()-1000).toISOString()})");
+  await f.get('familyVerificationSMS').listeners.click();
+  assert.equal(f.requests.length,1);
+  f.run("renderFamilyVerification({request_id:'challenge-b',stage:'repair-consent',expires_at:new Date(Date.now()+60000).toISOString()});selectedAccount='another-account'");
+  await f.get('familyVerificationSMS').listeners.click();
+  assert.equal(f.requests.length,1,'challenge crossed accounts');
+  f.run('renderFamilyVerification(null)');
+  assert.equal(f.get('familyVerificationPanel').hidden,true);
+});

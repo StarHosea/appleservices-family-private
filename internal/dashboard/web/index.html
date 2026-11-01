@@ -86,6 +86,13 @@
       <button class="button button-primary" type="submit">验证并加入家庭</button>
       <small id="familyAuthStatus" role="status" aria-live="polite">密码仅用于本次加入家庭，不保存；当前登录保持在线。</small>
     </form>
+    <div id="familyVerificationPanel" class="hme-auth" hidden>
+      <p id="familyVerificationStatus" role="status" aria-live="polite"></p>
+      <button id="familyVerificationSMS" class="button button-primary" type="button" hidden>发送短信验证码</button>
+      <form id="familyVerificationCodeForm" hidden><label for="familyVerificationCode">当前家庭验证收到的短信验证码<input id="familyVerificationCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required placeholder="六位短信验证码"></label><button class="button button-primary" type="submit">验证并继续加入</button></form>
+      <button id="familyVerificationCancel" class="text-button" type="button">取消本次加入</button>
+      <small>验证完成后继续本次加入；验证码和临时认证会话仅在内存中使用。</small>
+    </div>
     <div class="family-remove-controls" id="familyRemoveControls" hidden>
       <div><strong>成员管理</strong><small>从当前家庭移出一个池内普通成员</small></div>
       <select id="familyRemoveMember" aria-label="要移出的家庭成员"></select>

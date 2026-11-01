@@ -464,6 +464,7 @@ func run() error {
 	joinSharedStorage := flag.Bool("join-shared-storage", false, "switch this non-organizer family member to the available shared iCloud+ plan")
 	addPoolMemberDir := flag.String("add-pool-member-dir", "", "add one independently authenticated pool account through Apple's PET in-person flow")
 	removePoolMemberDir := flag.String("remove-pool-member-dir", "", "remove one current non-child pool member from this organizer's family")
+	interactiveFamilyAuth := flag.Bool("family-auth-stdin", false, "keep a FamilyKit repair challenge in memory and accept explicit SMS/code input on stdin")
 	targetPasswordEnv := flag.Bool("target-password-env", false, "use and immediately clear APPLESERVICES_TARGET_PASSWORD as Apple's rawFallback credential")
 	inviteAccountDir := flag.String("invite-account-dir", "", "target pool account directory for a new organizer invitation")
 	inviteOut := flag.String("invite-out", "", "new private invite checkpoint for the target account")
@@ -505,6 +506,9 @@ func run() error {
 	}
 	if *joinSharedStorage && (*inviteAccountDir != "" || *acceptInvite != "" || *addPoolMemberDir != "" || *removePoolMemberDir != "") {
 		return errors.New("joining shared storage must be a separate current-member operation")
+	}
+	if *interactiveFamilyAuth && (!*targetPasswordEnv || *addPoolMemberDir == "") {
+		return errors.New("interactive family authentication requires password-bound member addition")
 	}
 	if *targetPasswordEnv && *addPoolMemberDir == "" {
 		return errors.New("target password environment requires pool member addition")
@@ -549,7 +553,11 @@ func run() error {
 		return errors.New("bound APS token unavailable")
 	}
 	library, _ := filepath.Abs(nativeadi.DefaultLibraryPath())
-	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
+	helperTimeout := 75 * time.Second
+	if *interactiveFamilyAuth {
+		helperTimeout = 165 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), helperTimeout)
 	defer cancel()
 	native, err := nativeadi.NewClient(nativeadi.Config{LibraryPath: library, ProfileDir: profile, Python: "python", Identifier: device.Identifier, Serial: device.SerialNumber, PushToken: hardware.Push.Token})
 	if err != nil {
@@ -1231,7 +1239,7 @@ func run() error {
 			if rawPassword == "" {
 				return errors.New("target password environment is empty")
 			}
-			targetCredential, targetErr = ephemeralFamilyPET(ctx, native, hardware.Push.Token, *addPoolMemberDir, target, rawPassword)
+			targetCredential, targetErr = ephemeralFamilyPET(ctx, native, hardware.Push.Token, *addPoolMemberDir, target, rawPassword, *interactiveFamilyAuth)
 			rawPassword = ""
 			if targetErr != nil {
 				return targetErr
@@ -1843,7 +1851,7 @@ func familyAuthenticationError(stage string, err error) error {
 	return fmt.Errorf("%s：认证协议或设备身份未完成；未提交加入家庭请求", prefix)
 }
 
-func ephemeralFamilyPET(ctx context.Context, native *nativeadi.Client, pushToken []byte, targetDir string, target appleservices.Session, password string) (string, error) {
+func ephemeralFamilyPET(ctx context.Context, native *nativeadi.Client, pushToken []byte, targetDir string, target appleservices.Session, password string, interactive bool) (string, error) {
 	cookies := map[string][]gsa.CookieKV{}
 	for _, cookie := range target.Cookies {
 		cookies[cookie.URL] = append(cookies[cookie.URL], gsa.CookieKV{Name: cookie.Name, Value: cookie.Value})
@@ -1855,11 +1863,23 @@ func ephemeralFamilyPET(ctx context.Context, native *nativeadi.Client, pushToken
 	}
 	result, err := client.Login(target.AppleID, password)
 	password = ""
+	if err != nil && interactive {
+		var repair *gsa.AccountRepairError
+		if errors.As(err, &repair) && repair.Pending != nil {
+			result, err = continueFamilyRepair(ctx, client, target.AppleID, target.DSID, repair.Pending, os.Stdin, os.Stdout)
+			if err != nil {
+				return "", err
+			}
+		}
+	}
 	if err != nil {
 		return "", familyAuthenticationError("login", err)
 	}
 	if result == nil || result.SessionPayload == nil {
 		return "", errors.New("ephemeral FamilyKit authentication returned no session")
+	}
+	if result.SessionPayload["adsid"] != target.DSID {
+		return "", errors.New("家庭临时认证返回的账号绑定不匹配")
 	}
 	if result.NeedsTwoFactor {
 		adsid, _ := result.SessionPayload["adsid"].(string)
