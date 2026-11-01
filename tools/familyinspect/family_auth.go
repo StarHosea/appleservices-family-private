@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Laky-64/appleservices/gsa"
 	"github.com/Laky-64/appleservices/icloud"
@@ -109,4 +113,32 @@ func continueFamilyRepair(ctx context.Context, client familyRepairClient, appleI
 		return nil, errors.New("Apple 尚未签发家庭临时 PET，未提交加入家庭请求")
 	}
 	return result, nil
+}
+
+// Original Apple errors are private diagnostics, never dashboard fields or logs.
+// The existing GSA trace writes the matching HTTP status, headers and raw body
+// into this same owner-only directory. Successful attempts remove the directory.
+func traceFamilyAuthenticationError(stage string, err error) {
+	directory := os.Getenv("APPLESERVICES_2FA_DIAGNOSTIC_DIR")
+	if directory == "" {
+		return
+	}
+	details := map[string]any{"stage": stage, "error": err.Error()}
+	var rejection *gsa.AuthenticationError
+	if errors.As(err, &rejection) {
+		details["http_status"] = rejection.HTTPStatus
+		details["apple_code"] = rejection.Code
+		details["server_message"] = rejection.ServerMessage
+	}
+	data, encodeErr := json.Marshal(details)
+	if encodeErr != nil {
+		return
+	}
+	file, openErr := os.OpenFile(filepath.Join(directory, fmt.Sprintf("family-error-%d.json", time.Now().UnixNano())), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if openErr != nil {
+		return
+	}
+	defer file.Close()
+	file.Write(data)
+	fmt.Fprintf(os.Stderr, "FamilyKit authentication stage=%s failed; original-error-retained=true\n", stage)
 }

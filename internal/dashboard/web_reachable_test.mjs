@@ -222,3 +222,11 @@ test('family repair submits a cleared code to the same challenge and rejects exp
   f.run('renderFamilyVerification(null)');
   assert.equal(f.get('familyVerificationPanel').hidden,true);
 });
+
+test('family join failure remains visible in the family card after the transient notice',async()=>{
+  const f=fixture(()=>({ok:false,stage:'family-action',message:'Apple 二次认证失败'}));
+  await f.run("action('family-add-self',{code:'organizer-a'})");
+  assert.equal(f.get('familyActionStatus').hidden,false);
+  assert.match(f.get('familyActionStatus').textContent,/Apple 二次认证失败/);
+  assert.equal(f.get('familyActionStatus').classList.contains('error'),true);
+});

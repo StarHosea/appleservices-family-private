@@ -1831,6 +1831,7 @@ func localFamilyVerificationCode(targetDir string) (string, error) {
 // Report only known protocol status fields. Apple's messages and arbitrary
 // transport errors can include account details, cookies, URLs or credentials.
 func familyAuthenticationError(stage string, err error) error {
+	traceFamilyAuthenticationError(stage, err)
 	prefix := "FamilyKit 临时认证未完成（" + stage + "）"
 	var rejection *gsa.AuthenticationError
 	if errors.As(err, &rejection) {

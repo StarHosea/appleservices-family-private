@@ -1016,7 +1016,7 @@ func run() (runErr error) {
 			var output string
 			if action == "family-add-self" && panel != nil {
 				var finishFamilyAuthentication func()
-				output, execErr, finishFamilyAuthentication = runInteractiveFamilyHelper(queryCtx, panel, strings.TrimSpace(commandCode), helper, args, env)
+				output, execErr, finishFamilyAuthentication = runInteractiveFamilyHelper(queryCtx, panel, strings.TrimSpace(commandCode), *dir, helper, args, env)
 				defer finishFamilyAuthentication()
 			} else {
 				output, execErr = runFamilyHelper(queryCtx, helper, args, env)

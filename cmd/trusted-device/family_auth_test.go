@@ -52,7 +52,7 @@ printf 'FAMILY_STATUS_JSON={"member":true,"members":2,"self":1}\n'
 	done := make(chan completion, 1)
 	env := []string{"APPLESERVICES_TARGET_PASSWORD=fixture-password"}
 	go func() {
-		output, err, finish := runInteractiveFamilyHelper(ctx, panel, "organizer", helper, nil, env)
+		output, err, finish := runInteractiveFamilyHelper(ctx, panel, "organizer", dir, helper, nil, env)
 		finish()
 		done <- completion{output, err}
 	}()

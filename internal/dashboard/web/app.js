@@ -94,7 +94,7 @@ async function familyVerificationAction(name,code=''){
 }
 function resetFamilyAuth(){familyAuthAccount='';familyAuthOrganizer='';$('familyPassword').value='';$('familyAuthForm').hidden=true;$('familyAuthStatus').textContent='密码仅用于本次加入家庭，不保存；当前登录保持在线。';}
 function renderFamily(info,{checkedAt='',stale=false,animate=true}={}){
-  if(familyAuthAccount&&(familyAuthAccount!==selectedAccount||info?.member))resetFamilyAuth();
+  if(familyAccount&&familyAccount!==selectedAccount){$('familyActionStatus').hidden=true;$('familyActionStatus').textContent='';}if(familyAuthAccount&&(familyAuthAccount!==selectedAccount||info?.member))resetFamilyAuth();
   familyInfo=info||null;familyAccount=selectedAccount;
   const shell=$('familyCard'),card=$('familyStatus'),metrics=$('familyMetrics'),map=$('familyMap'),controls=$('familyControls'),removeControls=$('familyRemoveControls');card.className='family-status';
   updateFamilyCacheMeta(checkedAt,stale,!!info);
@@ -255,6 +255,7 @@ async function poll(){
 function renderPlans(info,{checkedAt='',stale=false}={}){planAccount=selectedAccount;planCheckedAt=checkedAt||'';const list=$('planList'),note=$('planCacheNote');list.replaceChildren();purchaseAction='';purchaseLabel='';$('purchaseButton').textContent='提交 50GB 方案';if(!info?.plans?.length){$('planSummary').textContent=info?'Apple 没有返回可购方案。':'先读取 Apple 实时报价；仅已验证的币种与价格会启用购买按钮。';note.textContent=info?cacheLabel('plan',checkedAt,stale):'尚无本地状态';note.classList.toggle('stale',!!info&&!!stale);return;}note.textContent=cacheLabel('plan',checkedAt,stale);note.classList.toggle('stale',!!stale);let target=null;for(const plan of info.plans){const row=document.createElement('div');row.className='plan-row';const name=document.createElement('strong');name.textContent=(plan.bytes?gib(plan.bytes):'未知容量')+(plan.period?' · '+plan.period:'');const price=document.createElement('span');price.textContent=plan.currency?(plan.currency+' '+(plan.price_minor/100).toFixed(2)+'/月'):'价格待 Apple 返回';row.append(name,price);list.append(row);if(plan.bytes===50*1024*1024*1024&&plan.available)target=plan;}if(!stale&&target?.currency==='CNY'&&target.price_minor===600){purchaseAction='storage-purchase';purchaseLabel='CNY 6.00/月';}else if(!stale&&target?.currency==='USD'&&target.price_minor===99){purchaseAction='storage-skill-purchase-us';purchaseLabel='USD 0.99/月';}if(stale){$('planSummary').textContent='显示上次保存的报价，正在后台重新核验 Apple。';}else if(purchaseAction){$('purchaseButton').textContent='提交 50GB · '+purchaseLabel;$('planSummary').textContent='已核对 50GB · '+purchaseLabel+'。点击购买仍会再次确认。';}else{$('planSummary').textContent='Apple 返回了方案，但没有匹配已验证的 50GB 币种与价格；购买保持禁用。';}}
 async function action(name,extra={},options={}){
   if(busy)return;
+  if(name==='family-add-self'){$('familyActionStatus').hidden=false;$('familyActionStatus').textContent='正在验证并加入家庭…';$('familyActionStatus').classList.remove('error');}
   const reachableAction=name.startsWith('hme-reachable-');
   if(reachableAction)reachableStatus(name==='hme-reachable-start'?'正在验证账户并请求发送邮件，请稍候…':'正在验证邮箱并切换转发目标，请稍候…');
   const requestedAccount=selectedAccount,loginVerificationAction=isLoginPage()&&['submit-sms','submit-account-code','submit-pairing','resend-sms','activation-connect'].includes(name);
@@ -288,6 +289,7 @@ async function action(name,extra={},options={}){
 		return;
 	  }
 	  if(name==='family-add-self'&&result.stage==='family-password-required'){
+ $('familyActionStatus').textContent=result.message||'请输入当前账号密码后继续';
 		familyAuthAccount=requestedAccount;familyAuthOrganizer=extra.code||'';
 		$('familyAuthForm').hidden=false;$('familyAuthStatus').textContent=result.message||'请输入当前账号密码，验证后继续加入家庭。';
 		$('familyAuthForm').scrollIntoView?.({behavior:'smooth',block:'center'});
@@ -307,7 +309,7 @@ async function action(name,extra={},options={}){
       if(name==='storage-purchase')$('planSummary').textContent=(result.message||'购买请求未完成')+detail;
       throw new Error((result.message||'操作未完成')+detail);
     }
-    if(name==='family-add-self')resetFamilyAuth();
+    if(name==='family-add-self'){resetFamilyAuth();$('familyActionStatus').hidden=false;$('familyActionStatus').textContent=result.message||'家庭操作已完成';}
     if(result.activation){activationInfo=result.activation;activationAccount=selectedAccount;if(current&&result.activation.completed){current.icloud_activated=true;current.activation_ready=false;}renderActivation(current);}
     if(result.store_authentication?.ready){$('storeAuthSummary').textContent='购买会话认证通过 · 当前后台会话可用 · 临时会话不会持久化';$('storeAuthForm').hidden=true;}
     if(result.storage){const checkedAt=new Date().toISOString();if(current){current.storage=result.storage;current.storage_checked_at=checkedAt;current.storage_stale=false;}renderStorage(result.storage,{checkedAt,stale:false});}
@@ -343,7 +345,7 @@ async function action(name,extra={},options={}){
     if(options.autoKey)autoRefreshState.delete(options.autoKey);
     if(result.code)showCode(result);else if(!options.silent)notice(result.message||'操作已完成');
     await poll();
-  }catch(error){if(name==='family-add-self'&&familyAuthAccount===requestedAccount&&requestedAccount===selectedAccount)$('familyAuthStatus').textContent=error.message;if(reachableAction&&requestedAccount===selectedAccount)reachableStatus(error.message,true);if(options.autoKey){autoRefreshState.set(options.autoKey,'failed');markAutoRefreshAttempt(options.autoKey,'failed');}if(loginVerificationAction){$('loginError').textContent=error.message;$('loginError').hidden=false;}else if(!options.silent)notice(error.message,true);}
+  }catch(error){if(name==='family-add-self'&&requestedAccount===selectedAccount){$('familyActionStatus').hidden=false;$('familyActionStatus').textContent=error.message;$('familyActionStatus').classList.add('error');}if(name==='family-add-self'&&familyAuthAccount===requestedAccount&&requestedAccount===selectedAccount)$('familyAuthStatus').textContent=error.message;if(reachableAction&&requestedAccount===selectedAccount)reachableStatus(error.message,true);if(options.autoKey){autoRefreshState.set(options.autoKey,'failed');markAutoRefreshAttempt(options.autoKey,'failed');}if(loginVerificationAction){$('loginError').textContent=error.message;$('loginError').hidden=false;}else if(!options.silent)notice(error.message,true);}
   finally{busy=false;if(reachableAction)hmeReachableAction='';if(name==='activation-connect')releaseAutoRefreshLease(requestedAccount);document.body.classList.remove('busy');if(familyAction)$('familyCard').classList.remove('is-loading');if(hmeAction)$('hmeCard').classList.remove('is-loading');if(current)render(current);if(name==='family-add-self'&&requestedAccount===selectedAccount&&!$('familyAuthForm').hidden)$('familyPassword').focus();if(reachableAction&&requestedAccount===selectedAccount){if(!$('hmeReachableAuthForm').hidden)$('hmeReachablePassword').focus();else if(!$('hmeReachableCodeForm').hidden)$('hmeReachableCode').focus();}}
 }
 $('reloadView').addEventListener('click',poll);$('codeButton').addEventListener('click',()=>action('code'));$('devicesButton').addEventListener('click',()=>action('devices'));$('devicesReconnectButton').addEventListener('click',()=>openLogin('reconnect'));$('renewButton').addEventListener('click',()=>action('validate-account'));

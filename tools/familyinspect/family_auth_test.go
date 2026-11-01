@@ -5,6 +5,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -121,5 +124,28 @@ func TestFamilyRepairRejectsBindingCancellationUnsupportedRepairAndMissingPET(t 
 				t.Fatal("progress exposed authentication material")
 			}
 		})
+	}
+}
+
+func TestFamilyAuthenticationKeepsOriginalErrorOnlyInPrivateDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("APPLESERVICES_2FA_DIAGNOSTIC_DIR", dir)
+	original := &gsa.AuthenticationError{HTTPStatus: 401, Code: -123, ServerMessage: "private-account private-original-error"}
+	public := familyAuthenticationError("repair-discovery", original).Error()
+	if strings.Contains(public, "private-") {
+		t.Fatal("original private error entered public output")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatal("original failure was not retained")
+	}
+	path := filepath.Join(dir, entries[0].Name())
+	data, err := os.ReadFile(path)
+	if err != nil || !bytes.Contains(data, []byte(original.ServerMessage)) {
+		t.Fatal("original Apple error was discarded")
+	}
+	info, err := os.Stat(path)
+	if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0) {
+		t.Fatal("original error must be owner-only")
 	}
 }

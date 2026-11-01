@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -53,7 +55,7 @@ func (w *familyProgressWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func runInteractiveFamilyHelper(ctx context.Context, panel *control.Server, organizer, helper string, args, env []string) (string, error, func()) {
+func runInteractiveFamilyHelper(ctx context.Context, panel *control.Server, organizer, targetDir, helper string, args, env []string) (string, error, func()) {
 	deadline, _ := ctx.Deadline()
 	if promptDeadline := time.Now().Add(160 * time.Second); deadline.IsZero() || deadline.After(promptDeadline) {
 		deadline = promptDeadline
@@ -62,9 +64,19 @@ func runInteractiveFamilyHelper(ctx context.Context, panel *control.Server, orga
 	if id == "" {
 		return "", errors.New("family challenge routing unavailable"), finish
 	}
+	diagnostics, diagnosticErr := os.MkdirTemp(targetDir, ".family-auth-diagnostics-")
+	if diagnosticErr != nil {
+		return "", errors.New("cannot create private family authentication diagnostics"), finish
+	}
+	attempt := filepath.Base(diagnostics)
+	fmt.Fprintf(os.Stderr, "FamilyKit attempt=%s started; organizer-bound=true; private-diagnostics=true\n", attempt)
 	command := exec.CommandContext(ctx, helper, append(args, "-family-auth-stdin")...)
 	command.Env = append(os.Environ(), env...)
-	writer := &familyProgressWriter{progress: func(stage string) { panel.SetFamilyAuthenticationStage(id, stage) }}
+	command.Env = append(command.Env, "APPLESERVICES_2FA_DIAGNOSTIC_DIR="+diagnostics)
+	writer := &familyProgressWriter{progress: func(stage string) {
+		fmt.Fprintf(os.Stderr, "FamilyKit attempt=%s stage=%s\n", attempt, stage)
+		panel.SetFamilyAuthenticationStage(id, stage)
+	}}
 	command.Stdout, command.Stderr = writer, writer
 	pipe, err := command.StdinPipe()
 	if err != nil {
@@ -102,7 +114,11 @@ func runInteractiveFamilyHelper(ctx context.Context, panel *control.Server, orga
 	writer.mu.Lock()
 	defer writer.mu.Unlock()
 	if err == nil {
+		fmt.Fprintf(os.Stderr, "FamilyKit attempt=%s helper-completed; verifying-membership=true\n", attempt)
+		os.RemoveAll(diagnostics)
 		panel.SetFamilyAuthenticationStage(id, "verifying-membership")
+	} else {
+		fmt.Fprintf(os.Stderr, "FamilyKit attempt=%s failed; private-diagnostics-retained=true\n", attempt)
 	}
 	return writer.output.String(), err, finish
 }
