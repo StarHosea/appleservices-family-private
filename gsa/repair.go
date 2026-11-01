@@ -11,11 +11,13 @@ import (
 // successful login session. It contains credentials: persist only in the owning
 // account's private directory, never in logs or dashboard responses.
 type PendingRepair struct {
-	AppleID       string    `json:"apple_id"`
-	CreatedAt     time.Time `json:"created_at"`
-	URL           string    `json:"url"`
-	IdentityToken string    `json:"identity_token"`
-	Session       Session   `json:"session"`
+	AppleID       string         `json:"apple_id"`
+	CreatedAt     time.Time      `json:"created_at"`
+	URL           string         `json:"url"`
+	IdentityToken string         `json:"identity_token"`
+	Session       Session        `json:"session"`
+	Status        map[string]any `json:"status,omitempty"`
+	Payload       map[string]any `json:"payload,omitempty"`
 }
 
 type AccountRepairError struct {
@@ -29,8 +31,10 @@ func (e *AccountRepairError) Error() string {
 
 func (e *AccountRepairError) Unwrap() error { return ErrAccountRepairRequired }
 
-// RepairURL accepts only Apple's authentication origins. Query and fragment
-// values may carry credentials and must never be included in diagnostics.
+// RepairURL validates an origin before using a continuation for an HTTP request.
+// Saving a private checkpoint does not fetch or open the URL and must also
+// retain unfamiliar origins and native schemes for offline protocol diagnosis.
+// Query and fragment values must never be included in diagnostics.
 func RepairURL(raw string) (*url.URL, bool) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.User != nil || u.Opaque != "" || (u.Port() != "" && u.Port() != "443") {
@@ -55,10 +59,8 @@ func (c *Client) accountRepairError(username string, status, payload map[string]
 	for _, fields := range []map[string]any{status, payload} {
 		for _, key := range []string{"url", "repairUrl", "repairURL"} {
 			if raw, _ := fields[key].(string); raw != "" {
-				if _, ok := RepairURL(raw); ok {
-					repairURL = raw
-					break
-				}
+				repairURL = raw
+				break
 			}
 		}
 		if repairURL != "" {
@@ -73,10 +75,11 @@ func (c *Client) accountRepairError(username string, status, payload map[string]
 		return e
 	}
 	// Snapshot's fixed endpoints do not include the advertised repair origin.
-	u, _ := url.Parse(repairURL)
-	for _, cookie := range c.cookieJar.Cookies(u) {
-		session.Cookies[repairURL] = append(session.Cookies[repairURL], CookieKV{Name: cookie.Name, Value: cookie.Value})
+	if u, err := url.Parse(repairURL); err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" {
+		for _, cookie := range c.cookieJar.Cookies(u) {
+			session.Cookies[repairURL] = append(session.Cookies[repairURL], CookieKV{Name: cookie.Name, Value: cookie.Value})
+		}
 	}
-	e.Pending = &PendingRepair{AppleID: username, CreatedAt: time.Now().UTC(), URL: repairURL, IdentityToken: identity, Session: session}
+	e.Pending = &PendingRepair{AppleID: username, CreatedAt: time.Now().UTC(), URL: repairURL, IdentityToken: identity, Session: session, Status: status, Payload: payload}
 	return e
 }

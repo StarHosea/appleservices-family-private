@@ -25,6 +25,15 @@ func TestPendingRepairIsPrivateAndSeparateFromSuccessfulSession(t *testing.T) {
 	if err := store.SavePendingRepair("OWNER@example.test", pending); err != nil {
 		t.Fatal(err)
 	}
+	pending.URL = "appleid://repair?token=private-native-continuation"
+	if err := store.SavePendingRepair("owner@example.test", pending); err != nil {
+		t.Fatal("private checkpoint rejected an unfamiliar native continuation", err)
+	}
+	data, err := os.ReadFile(filepath.Join(store.dir, "gsa-repair.json"))
+	var retained gsa.PendingRepair
+	if err != nil || json.Unmarshal(data, &retained) != nil || retained.URL != pending.URL {
+		t.Fatal("native continuation was not retained privately")
+	}
 	info, err := os.Stat(filepath.Join(store.dir, "gsa-repair.json"))
 	if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0) {
 		t.Fatal("repair checkpoint must remain owner-only")

@@ -50,3 +50,21 @@ func TestRepairURLRejectsUntrustedOrigins(t *testing.T) {
 		}
 	}
 }
+
+func TestPendingRepairRetainsUnfamiliarURLWithoutFollowingIt(t *testing.T) {
+	for _, raw := range []string{"https://setup.icloud.com/setup/update_account_ui", "appleid://repair?token=private-token", "https://unknown.example.test/?token=private-token", "https://invalid.test/%"} {
+		c := NewClient(headerProvider{})
+		c.transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("checkpoint creation fetched an unvalidated URL")
+			return nil, nil
+		})
+		if _, err := c.anisetteHeaders(); err != nil {
+			t.Fatal(err)
+		}
+		payload := map[string]any{"adsid": "private-account", "GsIdmsToken": "private-identity", "url": raw}
+		err := c.accountRepairError("owner@example.test", nil, payload).(*AccountRepairError)
+		if err.Pending == nil || err.Pending.URL != raw || err.Pending.Payload["GsIdmsToken"] != "private-identity" || strings.Contains(err.Error(), "private-") {
+			t.Fatal("unfamiliar continuation was discarded or exposed")
+		}
+	}
+}

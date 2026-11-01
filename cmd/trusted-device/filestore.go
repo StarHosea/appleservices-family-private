@@ -21,11 +21,8 @@ func (s fileStore) acceptedPath() string { return filepath.Join(s.dir, "icloud-a
 
 func (s fileStore) SavePendingRepair(appleID string, pending *gsa.PendingRepair) error {
 	if pending == nil || appleID == "" || !strings.EqualFold(pending.AppleID, appleID) ||
-		pending.Session.DSID == "" || pending.IdentityToken == "" || pending.CreatedAt.IsZero() {
+		pending.Session.DSID == "" || pending.IdentityToken == "" || pending.CreatedAt.IsZero() || pending.URL == "" {
 		return errors.New("pending authentication checkpoint account binding is invalid")
-	}
-	if _, ok := gsa.RepairURL(pending.URL); !ok {
-		return errors.New("pending authentication checkpoint has no supported Apple URL")
 	}
 	if err := writeJSONFile(filepath.Join(s.dir, "gsa-repair.json"), pending); err != nil {
 		return errors.New("could not save private pending authentication checkpoint")
