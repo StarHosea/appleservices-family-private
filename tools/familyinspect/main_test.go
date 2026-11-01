@@ -2,6 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/Laky-64/appleservices/gsa"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -174,5 +177,28 @@ func TestUnreadableFamilyNeedsPositiveEligibilityAndWritesEmptyMembers(t *testin
 	data, err := os.ReadFile(path)
 	if err != nil || string(data) != "[]" {
 		t.Fatal("empty family must emit a usable private member array")
+	}
+}
+
+func TestFamilyAuthenticationErrorReportsSafeReasonWithoutPrivateDetails(t *testing.T) {
+	private := "private@example.test private-token private-password"
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"apple-rejection", fmt.Errorf("private wrapper: %w", &gsa.AuthenticationError{Operation: private, Protocol: private, Code: -20101, ServerMessage: private}), "ec=-20101"},
+		{"http", &gsa.AuthenticationError{HTTPStatus: 401, ServerMessage: private}, "HTTP=401"},
+		{"repair", fmt.Errorf("%s: %w", private, gsa.ErrAccountRepairRequired), "repair"},
+		{"locked", &gsa.SecondFactorError{Operation: private, HTTPStatus: 403, Code: -21669, SecurityCodeLocked: true}, "locked=true"},
+		{"transport", &url.Error{Op: "POST", URL: "https://apple.example/" + private, Err: errors.New(private)}, "timeout=false"},
+		{"unknown", errors.New(private), "认证协议或设备身份未完成"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			message := familyAuthenticationError("login", tc.err).Error()
+			if !strings.Contains(message, tc.want) || !strings.Contains(message, "未提交加入家庭请求") || strings.Contains(message, "private") {
+				t.Fatal("missing safe failure reason or private detail disclosed")
+			}
+		})
 	}
 }

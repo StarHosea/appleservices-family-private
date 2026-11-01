@@ -1820,6 +1820,29 @@ func localFamilyVerificationCode(targetDir string) (string, error) {
 	return code, nil
 }
 
+// Report only known protocol status fields. Apple's messages and arbitrary
+// transport errors can include account details, cookies, URLs or credentials.
+func familyAuthenticationError(stage string, err error) error {
+	prefix := "FamilyKit 临时认证未完成（" + stage + "）"
+	var rejection *gsa.AuthenticationError
+	if errors.As(err, &rejection) {
+		return fmt.Errorf("%s：Apple 认证拒绝，HTTP=%d ec=%d；未提交加入家庭请求", prefix, rejection.HTTPStatus, rejection.Code)
+	}
+	var factor *gsa.SecondFactorError
+	if errors.As(err, &factor) {
+		return fmt.Errorf("%s：Apple 二次验证未完成，HTTP=%d ec=%d locked=%t too-many-sent=%t too-many-validated=%t no-trusted-devices=%t；未提交加入家庭请求",
+			prefix, factor.HTTPStatus, factor.Code, factor.SecurityCodeLocked, factor.TooManyCodesSent, factor.TooManyCodesValidated, factor.NoTrustedDevices)
+	}
+	if errors.Is(err, gsa.ErrAccountRepairRequired) {
+		return fmt.Errorf("%s：Apple 要求额外认证步骤（repair），尚未签发临时家庭凭据；未自动请求短信，未提交加入家庭请求", prefix)
+	}
+	var transport *url.Error
+	if errors.As(err, &transport) {
+		return fmt.Errorf("%s：Apple 认证连接失败，timeout=%t；未提交加入家庭请求", prefix, transport.Timeout())
+	}
+	return fmt.Errorf("%s：认证协议或设备身份未完成；未提交加入家庭请求", prefix)
+}
+
 func ephemeralFamilyPET(ctx context.Context, native *nativeadi.Client, pushToken []byte, targetDir string, target appleservices.Session, password string) (string, error) {
 	cookies := map[string][]gsa.CookieKV{}
 	for _, cookie := range target.Cookies {
@@ -1833,7 +1856,7 @@ func ephemeralFamilyPET(ctx context.Context, native *nativeadi.Client, pushToken
 	result, err := client.Login(target.AppleID, password)
 	password = ""
 	if err != nil {
-		return "", errors.New("ephemeral FamilyKit authentication failed")
+		return "", familyAuthenticationError("login", err)
 	}
 	if result == nil || result.SessionPayload == nil {
 		return "", errors.New("ephemeral FamilyKit authentication returned no session")
@@ -1851,7 +1874,7 @@ func ephemeralFamilyPET(ctx context.Context, native *nativeadi.Client, pushToken
 		defer os.Remove(requestPath)
 		defer os.Remove(codePath)
 		if err := client.RequestTrustedDeviceCode(adsid, idms); err != nil {
-			return "", errors.New("ephemeral FamilyKit trusted-device request failed")
+			return "", familyAuthenticationError("trusted-device-request", err)
 		}
 		if err := os.WriteFile(requestPath, []byte(time.Now().UTC().Format(time.RFC3339Nano)), 0600); err != nil {
 			return "", errors.New("cannot announce ephemeral FamilyKit challenge")
@@ -1887,7 +1910,7 @@ func ephemeralFamilyPET(ctx context.Context, native *nativeadi.Client, pushToken
 		}
 		if err := client.SubmitTrustedDeviceCode(adsid, idms, code); err != nil {
 			code = ""
-			return "", errors.New("ephemeral FamilyKit verification code was rejected")
+			return "", familyAuthenticationError("trusted-device-verify", err)
 		}
 		code = ""
 		result = client.VerifiedLoginResult()
