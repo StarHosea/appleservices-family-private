@@ -443,7 +443,7 @@ func (c *Client) Login(username, password string) (*LoginResult, error) {
 	au, _ := status["au"].(string)
 	if err := checkAuthenticationContinuation(au); err != nil {
 		if errors.Is(err, ErrAccountRepairRequired) {
-			return nil, fmt.Errorf("%w (%s)", err, continuationDiagnostic(status, sessionPayload))
+			return nil, c.accountRepairError(username, status, sessionPayload)
 		}
 		return nil, err
 	}

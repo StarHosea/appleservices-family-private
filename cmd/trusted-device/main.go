@@ -177,6 +177,12 @@ func run() (runErr error) {
 		if errors.Is(runErr, gsa.ErrAccountRepairRequired) {
 			status.FailureStage, status.State = status.State, "account_repair_required"
 			status.VerificationRequired = false
+			var repair *gsa.AccountRepairError
+			if errors.As(runErr, &repair) && repair.Pending != nil {
+				if err := store.SavePendingRepair(appleID, repair.Pending); err != nil {
+					runErr = errors.Join(runErr, err)
+				}
+			}
 		} else if status.State != "verification_required" {
 			if runErr != nil {
 				status.FailureStage, status.State = status.State, "failed"

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Laky-64/appleservices"
+	"github.com/Laky-64/appleservices/gsa"
 )
 
 type fileStore struct {
@@ -17,6 +18,20 @@ type fileStore struct {
 func (s fileStore) devicePath() string   { return filepath.Join(s.dir, "device.json") }
 func (s fileStore) sessionPath() string  { return filepath.Join(s.dir, "session.json") }
 func (s fileStore) acceptedPath() string { return filepath.Join(s.dir, "icloud-accepted.json") }
+
+func (s fileStore) SavePendingRepair(appleID string, pending *gsa.PendingRepair) error {
+	if pending == nil || appleID == "" || !strings.EqualFold(pending.AppleID, appleID) ||
+		pending.Session.DSID == "" || pending.IdentityToken == "" || pending.CreatedAt.IsZero() {
+		return errors.New("pending authentication checkpoint account binding is invalid")
+	}
+	if _, ok := gsa.RepairURL(pending.URL); !ok {
+		return errors.New("pending authentication checkpoint has no supported Apple URL")
+	}
+	if err := writeJSONFile(filepath.Join(s.dir, "gsa-repair.json"), pending); err != nil {
+		return errors.New("could not save private pending authentication checkpoint")
+	}
+	return nil
+}
 
 func (s fileStore) SaveAcceptedICloud(appleID string, accepted appleservices.RestoredICloudSession) error {
 	saved, err := s.LoadSession()

@@ -6,9 +6,34 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/Laky-64/appleservices"
+	"github.com/Laky-64/appleservices/gsa"
 )
+
+func TestPendingRepairIsPrivateAndSeparateFromSuccessfulSession(t *testing.T) {
+	store := fileStore{dir: t.TempDir()}
+	saved := &appleservices.Session{AppleID: "owner@example.test", DSID: "old-account", Tokens: map[string]string{"com.apple.gs.idms.pet": "existing-pet"}}
+	if err := store.SaveSession(saved); err != nil {
+		t.Fatal(err)
+	}
+	pending := &gsa.PendingRepair{AppleID: saved.AppleID, CreatedAt: time.Now(), URL: "https://appleid.apple.com/auth/repair?token=private", IdentityToken: "private-token", Session: gsa.Session{DSID: "pending-account"}}
+	if store.SavePendingRepair("different@example.test", pending) == nil {
+		t.Fatal("cross-account repair checkpoint accepted")
+	}
+	if err := store.SavePendingRepair("OWNER@example.test", pending); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(store.dir, "gsa-repair.json"))
+	if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0) {
+		t.Fatal("repair checkpoint must remain owner-only")
+	}
+	restored, err := store.LoadSession()
+	if err != nil || restored.DSID != saved.DSID || restored.Tokens["com.apple.gs.idms.pet"] != "existing-pet" {
+		t.Fatal("pending repair overwrote the successful login session")
+	}
+}
 
 func TestLoadAcceptedICloudRequiresSameSavedAccount(t *testing.T) {
 	dir := t.TempDir()
